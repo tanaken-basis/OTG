@@ -3,7 +3,9 @@
 [English](README.en.md) &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [日本語](README.jp.md)
 
 ## 概要
-なるべく均一なグループ分けを自動生成するためのPythonのプログラムです。最適輸送の手法を用いています。
+なるべく均一なグループ分けを自動生成するためのPythonのプログラムです。
+均一性の指標の構成のために最適輸送を用いています。
+最適輸送の計算には Sinkhorn-Knopp アルゴリズムを用いています。なお、3群以上へのグループ分けにおいては、multi-marginal optimal transport に対する Sinkhorn-Knopp アルゴリズム が必要になり、このプログラムにおいてもその実装を行っています。
 
 ## 使い方
 - Pythonの実行環境がない場合

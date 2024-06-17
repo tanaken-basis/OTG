@@ -1,15 +1,13 @@
 ##### OTG (Optimal Transport Grouping)
 ## tanaken ( Kentaro TANAKA, 2024.2- )
 
-#### GUI with Flet ####
-
 ############################################################
 #### Required libraries ####
-# pip install numpy
-# pip install pandas
-# pip install matplotlib
-# pip install umap-learn
-# pip install flet
+# !pip install numpy
+# !pip install pandas
+# !pip install matplotlib
+# !pip install umap-learn
+# !pip install flet
 
 ############################################################
 #### Import ####
@@ -24,6 +22,24 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib import patches
 from matplotlib import cm as cm
+is_umap_loaded = True
+try:
+    import umap
+    # from numba import jit
+except ImportError as e:
+    is_umap_loaded = False
+    print(f"{e} is not installed.")
+from typing import List, Tuple
+import os
+if os.name == 'nt':
+    import ctypes
+    ENABLE_PROCESSED_OUTPUT = 0x0001
+    ENABLE_WRAP_AT_EOL_OUTPUT = 0x0002
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+    MODE = ENABLE_PROCESSED_OUTPUT + ENABLE_WRAP_AT_EOL_OUTPUT + ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetStdHandle(-11)
+    kernel32.SetConsoleMode(handle, MODE)
 import flet as ft
 from flet.matplotlib_chart import MatplotlibChart
 is_umap_loaded = True
@@ -106,11 +122,11 @@ def gen_grouping_indexes_list(N_size, rand=True, data_order_list=None):
         range_from = range_to
     return grouping_indexes_list
 
-## Functions to calculate costs of optrimal transport, etc.
+## Functions for the calculation of optimal transport
 # @jit
 def calc_multi_ot(marginal_mass_vectors, cost_tensor, normalized_cost_tensor,
                   N_size, N_rank, N_accum, N_size_prod,
-                  numerical_precision=2e-8, ot_speed=0.02, ot_stopping_rule=0.02, ot_loop_max=200): ## ot_stopping_rule: Criteria to stop updating "u". If the relative error of "u" is smaller than the stop criterion, it is terminated.
+                  numerical_precision = 2e-8, ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200): ## ot_stopping_rule: Criteria to stop updating "u". If the relative error of "u" is smaller than the stop criterion, it is terminated.
     ## Optrimal transport
     K_tensor = np.exp(- normalized_cost_tensor / ot_speed) # Gibbs kernel
     u_vec_list = []
@@ -156,9 +172,10 @@ def calc_multi_ot(marginal_mass_vectors, cost_tensor, normalized_cost_tensor,
         objective_function_value = objective_function_value + weighted_cost_tensor[get_tensor_flattened_index_from_multi_index(m_index, N_rank, N_accum)]
     return (objective_function_value, P_tensor, weighted_cost_tensor, u_vec_list, f_vec_list)
 
-def calc_intergroup_cost_tensor(grouping_indexes_list, data_points_nparray, marginal_mass_vectors,
-                                N_size, N_rank, N_accum, N_size_prod,
-                                numerical_precision=2e-8):
+## Functions for calculating optrimal grouping with barycenter (BC)
+def calc_intergroup_cost_tensor_with_bc(grouping_indexes_list, data_points_nparray, marginal_mass_vectors,
+                                N_size, N_rank, N_accum, N_size_prod, order = 2.0,
+                                numerical_precision = 2e-8):
     cost_tensor = np.zeros(N_size_prod)
     for m_index in np.ndindex(N_size):
         temp_data_points_nparray = []
@@ -178,10 +195,10 @@ def calc_intergroup_cost_tensor(grouping_indexes_list, data_points_nparray, marg
         normalized_cost_tensor = normalized_cost_tensor/max_cost_value
     return (cost_tensor, normalized_cost_tensor)
 
-def calc_intergroup_cost_value(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
-                               N_size, N_rank, N_accum, N_size_prod,
-                               numerical_precision=2e-8, ot_speed=0.02, ot_stopping_rule=0.02, ot_loop_max=200):
-    (intergroup_cost_tensor, normalized_intergroup_cost_tensor) = calc_intergroup_cost_tensor(
+def calc_intergroup_cost_value_with_bc(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                               N_size, N_rank, N_accum, N_size_prod, order = 2.0,
+                               numerical_precision = 2e-8, ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200):
+    (intergroup_cost_tensor, normalized_intergroup_cost_tensor) = calc_intergroup_cost_tensor_with_bc(
         grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
         N_size, N_rank, N_accum, N_size_prod,
         numerical_precision)
@@ -192,8 +209,8 @@ def calc_intergroup_cost_value(grouping_indexes_list, data_points_nparray, margi
     return (intergroup_cost_value, intergroup_P_tensor, intergroup_weighted_cost_tensor, 
             intergroup_u_vec_list, intergroup_f_vec_list, intergroup_cost_tensor)
 
-def calc_intragroup_cost_nparray_list(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
-                                      N_size, N_rank, N_accum, N_size_prod):
+def calc_intragroup_cost_nparray_list_with_bc(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                                      N_size, N_rank, N_accum, N_size_prod, order = 2.0):
     cost_nparray_list = []
     barycenter_nparray_list = []
     for group, size in enumerate(N_size):
@@ -205,19 +222,19 @@ def calc_intragroup_cost_nparray_list(grouping_indexes_list, data_points_nparray
                 temp_data_points_nparray.append(data_points_nparray[grouping_indexes_list[group][element]])
             temp_barycenter_nparray = np.mean(temp_data_points_nparray, axis=0)
             for element in range(N_size[group]): ## Cost between one mass point and barycenter
-                temp_cost_value_bt2 = np.linalg.norm(temp_data_points_nparray[element] - temp_barycenter_nparray) ## Cost between two points
+                temp_cost_value_bt2 = np.linalg.norm(temp_data_points_nparray[element] - temp_barycenter_nparray, ord=order) ## Cost between two points
                 temp_cost_nparray[element] = temp_cost_value_bt2
         cost_nparray_list.append(temp_cost_nparray)
         barycenter_nparray_list.append(temp_barycenter_nparray)
     return (cost_nparray_list, barycenter_nparray_list)
 
-def calc_intragroup_cost_value(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
-                               N_size, N_rank, N_accum, N_size_prod):
+def calc_intragroup_cost_value_with_bc(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                               N_size, N_rank, N_accum, N_size_prod, order = 2.0):
     intragroup_cost_value = 0
     intragroup_average_cost_list = []
-    (intragroup_cost_nparray_list, intragroup_barycenter_nparray_list) = calc_intragroup_cost_nparray_list(
+    (intragroup_cost_nparray_list, intragroup_barycenter_nparray_list) = calc_intragroup_cost_nparray_list_with_bc(
         grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
-        N_size, N_rank, N_accum, N_size_prod
+        N_size, N_rank, N_accum, N_size_prod, order
         )
     for group in range(N_rank):
         intragroup_average_cost = np.mean(intragroup_cost_nparray_list[group])
@@ -226,55 +243,1518 @@ def calc_intragroup_cost_value(grouping_indexes_list, data_points_nparray, margi
     intragroup_cost_value = intragroup_cost_value/N_rank
     return (intragroup_cost_value, intragroup_cost_nparray_list, intragroup_average_cost_list, intragroup_barycenter_nparray_list)
 
-def calc_aggregate_statistical_cost_list(intragroup_barycenter_nparray_list, intragroup_average_cost_list,
-                                         N_size, N_rank, N_accum, N_size_prod):
+def calc_aggregate_statistical_cost_list_with_bc(intragroup_barycenter_nparray_list, intragroup_average_cost_list,
+                                         N_size, N_rank, N_accum, N_size_prod, order = 2.0):
     center_of_intragroup_barycenter_nparray_list =  np.mean(intragroup_barycenter_nparray_list, axis=0)
     center_of_intragroup_average_cost = np.mean(intragroup_average_cost_list, axis=0)
     mean_cost_value = 0
-    variance_cost_value = 0
+    deviation_cost_value = 0
     for group in range(N_rank):
-        mean_cost_value = mean_cost_value + np.linalg.norm(intragroup_barycenter_nparray_list[group] - center_of_intragroup_barycenter_nparray_list)
-        variance_cost_value = variance_cost_value + abs(intragroup_average_cost_list[group] - center_of_intragroup_average_cost)
+        mean_cost_value = mean_cost_value + np.linalg.norm(intragroup_barycenter_nparray_list[group] - center_of_intragroup_barycenter_nparray_list, ord = order)
+        deviation_cost_value = deviation_cost_value + abs(intragroup_average_cost_list[group] - center_of_intragroup_average_cost)
     mean_cost_value = mean_cost_value/N_rank
-    variance_cost_value = variance_cost_value/N_rank   
-    return (mean_cost_value, variance_cost_value)
+    deviation_cost_value = deviation_cost_value/N_rank   
+    return (mean_cost_value, deviation_cost_value)
 
-def calc_adjusted_cost_value(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+def calc_adjusted_cost_value_with_bc(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
                              N_size, N_rank, N_accum, N_size_prod, 
-                             mean_penalty_weight=0.2, variance_penalty_weight=0.8, 
-                             numerical_precision=2e-8, ot_speed=0.02, ot_stopping_rule=0.02, ot_loop_max=200):
+                             mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1, order = 2.0, 
+                             numerical_precision = 2e-8, ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200):
     ## intergroup_cost_value
     (intergroup_cost_value, intergroup_P_tensor, intergroup_weighted_cost_tensor, 
     intergroup_u_vec_list, intergroup_f_vec_list,
-    intergroup_cost_tensor) = calc_intergroup_cost_value(
+    intergroup_cost_tensor) = calc_intergroup_cost_value_with_bc(
         grouping_indexes_list, data_points_nparray, marginal_mass_vectors,
-        N_size, N_rank, N_accum, N_size_prod,
+        N_size, N_rank, N_accum, N_size_prod, order,
         numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
         )
     ## intragroup_cost_value
     (intragroup_cost_value, intragroup_cost_nparray_list, intragroup_average_cost_list,
-     intragroup_barycenter_nparray_list) = calc_intragroup_cost_value(
+     intragroup_barycenter_nparray_list) = calc_intragroup_cost_value_with_bc(
         grouping_indexes_list, data_points_nparray, marginal_mass_vectors,
-        N_size, N_rank, N_accum, N_size_prod
+        N_size, N_rank, N_accum, N_size_prod, order
         )
     ## aggregate_statistical_cost_value
-    (mean_cost_value, variance_cost_value) = calc_aggregate_statistical_cost_list(
+    (mean_cost_value, deviation_cost_value) = calc_aggregate_statistical_cost_list_with_bc(
         intragroup_barycenter_nparray_list, intragroup_average_cost_list,
-        N_size, N_rank, N_accum, N_size_prod
+        N_size, N_rank, N_accum, N_size_prod, order
         )
-    ## adjusted_cost_value = (intergroup_cost_value + mean_cost_value + variance_cost_value) / (intragroup_cost_value)
+    ## adjusted_cost_value = (intergroup_cost_value + mean_cost_value + deviation_cost_value) / (intragroup_cost_value)
     adjusted_cost_value = 0
     if abs(intragroup_cost_value) < numerical_precision:
         adjusted_cost_value = np.inf
     else:
-        adjusted_cost_value = (intergroup_cost_value + mean_penalty_weight*mean_cost_value + variance_penalty_weight*variance_cost_value)/(intragroup_cost_value)
+        adjusted_cost_value = (intergroup_cost_value + mean_penalty_weight*mean_cost_value + deviation_penalty_weight*deviation_cost_value)/(intragroup_cost_value)
     ## return
-    return (adjusted_cost_value, mean_cost_value, variance_cost_value,
+    return (adjusted_cost_value, mean_cost_value, deviation_cost_value,
             intragroup_cost_value, intragroup_cost_nparray_list, intragroup_barycenter_nparray_list, 
             intergroup_cost_value, intergroup_P_tensor, intergroup_weighted_cost_tensor, 
             intergroup_u_vec_list, intergroup_f_vec_list, intergroup_cost_tensor)
 
-## Functions for drawing graphs
+def calc_optimal_grouping_with_bc(data_points_nparray, N_size,
+                           N_rank = None, N_accum = None, N_size_prod = None,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1, order = 2.0,
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 10, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           show_info = False, drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           viz2d_x = None, viz2d_y = None):
+    ## N_rank, N_accum, N_size_prod, marginal_mass_vectors
+    if (N_rank is None) or (N_accum is None) or (N_size_prod is None):
+        (N_rank, N_accum, N_size_prod) = get_N(N_size)
+    marginal_mass_vectors = calc_marginal_mass_vectors(N_rank, N_size)
+    ## Initial value settings
+    if init_grouping_indexes_list is None:
+        init_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=init_grouping_rand) ## True: Random grouping, False: Grouping in order
+    ## Calculation of optimal transportation costs under initial conditions
+    (init_adjusted_cost_value, init_mean_cost_value, init_deviation_cost_value,
+    init_intragroup_cost_value, init_intragroup_cost_nparray_list, init_intragroup_barycenter_nparray_list,
+    init_intergroup_cost_value, init_intergroup_P_tensor, init_intergroup_weighted_cost_tensor,
+    init_intergroup_u_vec_list, init_intergroup_f_vec_list,
+    init_intergroup_cost_tensor) = calc_adjusted_cost_value_with_bc(
+        init_grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+        N_size, N_rank, N_accum, N_size_prod, order,
+        mean_penalty_weight, deviation_penalty_weight, 
+        numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
+    )
+    ## Preparation for recording
+    iteration_number_list = [0]
+    elapsed_time_list = [0]
+    new_adjusted_cost_trends_list = [init_adjusted_cost_value]
+    opt_adjusted_cost_trends_list = [init_adjusted_cost_value]
+    start_time = time.time()
+    ## info
+    if show_info:
+        info_func(info_args, "---------- init")
+        info_func(info_args, "init_grouping_indexes_list: " + str(init_grouping_indexes_list))
+        info_func(info_args, "init_adjusted_cost_value: " + str(init_adjusted_cost_value))
+        info_func(info_args, "  (init_intergroup_cost_value, init_intragroup_cost_value: " + str(init_intergroup_cost_value) + ", " + str(init_intragroup_cost_value) + ")")
+        info_func(info_args, "  (mean_penalty_weight*init_mean_cost_value, deviation_penalty_weight*init_deviation_cost_value : " 
+              + str(mean_penalty_weight*init_mean_cost_value) + ", " + str(deviation_penalty_weight*init_deviation_cost_value) + ")")
+    if drawing_graphs:
+        (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
+                                                                init_grouping_indexes_list, data_points_nparray, 
+                                                                N_size, N_rank, N_accum, N_size_prod,
+                                                                viz2d_x, viz2d_y, init_intergroup_P_tensor)
+        # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, init_grouping_indexes_list, data_points_nparray,
+        #                             viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Initial Value")
+        show_P_tensor(init_intergroup_P_tensor, N_size, N_rank, N_accum, f_size=(4,3), f_title="Initial Value")
+    ## opt
+    opt_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
+    opt_adjusted_cost_value = init_adjusted_cost_value
+    opt_mean_cost_value = init_mean_cost_value
+    opt_deviation_cost_value = init_deviation_cost_value
+    opt_intragroup_cost_value = init_intragroup_cost_value
+    opt_intergroup_cost_value = init_intergroup_cost_value
+    opt_intergroup_P_tensor = copy.deepcopy(init_intergroup_P_tensor)
+    ## new
+    new_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
+    new_adjusted_cost_value = init_adjusted_cost_value
+    new_mean_cost_value = init_mean_cost_value
+    new_deviation_cost_value = init_deviation_cost_value
+    new_intragroup_cost_value = init_intragroup_cost_value
+    new_intragroup_cost_nparray_list = copy.deepcopy(init_intragroup_cost_nparray_list)
+    new_intragroup_barycenter_nparray_list = copy.deepcopy(init_intragroup_barycenter_nparray_list)
+    new_intergroup_cost_value = init_intergroup_cost_value
+    new_intergroup_P_tensor = copy.deepcopy(init_intergroup_P_tensor)
+    new_intergroup_weighted_cost_tensor = copy.deepcopy(init_intergroup_weighted_cost_tensor)
+    new_intergroup_cost_tensor = copy.deepcopy(init_intergroup_cost_tensor)
+    ## Search for optimal value
+    new_grouping_flag = True
+    search_stopping_rule_counter = 0
+    for loop in range(global_loop_max):
+        if show_info:
+            info_func(info_args, "---------- loop: " + str(loop+1))
+        search_stopping_rule_counter = search_stopping_rule_counter + 1
+        if search_method=="rand": ## search_method=="rand"
+            new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=True) ## True: Random grouping, False: Grouping in order
+        else: ## search_method=="ex" or search_method=="hybrid"
+            if (search_stopping_rule_counter >= search_stopping_rule_rep):
+                opt_adjusted_cost_diff_list = opt_adjusted_cost_trends_list[(len(opt_adjusted_cost_trends_list)-search_stopping_rule_rep):]
+                old_adjusted_cost_value = opt_adjusted_cost_diff_list[0]
+                opt_adjusted_cost_diff_list = abs(np.array(opt_adjusted_cost_diff_list) - old_adjusted_cost_value)
+                opt_adjusted_cost_diff_list = opt_adjusted_cost_diff_list/(abs(old_adjusted_cost_value)+numerical_precision)
+                opt_adjusted_cost_diff_max = max(opt_adjusted_cost_diff_list)
+                if opt_adjusted_cost_diff_max <= search_stopping_rule_err:
+                    if search_method=="hybrid": ## search_method=="hybrid"
+                        search_stopping_rule_counter = 0
+                        new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=True) ## True: Random grouping, False: Grouping in order
+                        if show_info:
+                            info_func(info_args, "Grouping has been shuffled.")
+                    else: ## search_method=="ex"
+                        if show_info:
+                            info_func(info_args, "The stopping criterion determined that convergence to the optimum value was achieved.")
+                        break
+            ## Local grouping: Select two clusters and perform an exchange between the two clusters
+            probability_tensor = copy.deepcopy(new_intergroup_weighted_cost_tensor)
+            cluster_1_value = (random.choices(probability_tensor, k=1, weights=probability_tensor))[0]
+            cluster_1_flattened_index_list = get_tensor_flattened_index_list_from_value(probability_tensor, cluster_1_value, tensor_tolerance)
+            cluster_1_flattened_index = random.choice(cluster_1_flattened_index_list)
+            cluster_1_multi_index = get_tensor_multi_index_from_flattened_index(cluster_1_flattened_index, N_rank, N_accum)
+            probability_tensor[cluster_1_flattened_index] = 0
+            cluster_2_value = (random.choices(probability_tensor, k=1, weights=probability_tensor))[0]
+            cluster_2_flattened_index_list = get_tensor_flattened_index_list_from_value(probability_tensor, cluster_2_value, tensor_tolerance)
+            cluster_2_flattened_index = random.choice(cluster_2_flattened_index_list)
+            cluster_2_multi_index = get_tensor_multi_index_from_flattened_index(cluster_2_flattened_index, N_rank, N_accum)
+            ## Preparation for local grouping
+            local_N_size = []
+            local_data_indexes = []
+            opt_local_grouping_indexes_list = []
+            ## local_N_size, local_data_indexes, opt_local_grouping_indexes_list, local_N_rank, local_N_accum, local_N_size_prod, local_marginal_mass_vectors
+            for local_group in range(N_rank):
+                if cluster_1_multi_index[local_group] == cluster_2_multi_index[local_group]:
+                    local_N_size.append(1)
+                    temp_index = new_grouping_indexes_list[local_group][cluster_1_multi_index[local_group]]
+                    local_data_indexes.append(temp_index)
+                    opt_local_grouping_indexes_list.append([temp_index])
+                else:
+                    local_N_size.append(2)
+                    temp_index_1 = new_grouping_indexes_list[local_group][cluster_1_multi_index[local_group]]
+                    temp_index_2 = new_grouping_indexes_list[local_group][cluster_2_multi_index[local_group]]
+                    local_data_indexes.append(temp_index_1)
+                    local_data_indexes.append(temp_index_2)
+                    opt_local_grouping_indexes_list.append([temp_index_1, temp_index_2])
+            local_N_size = tuple(local_N_size)
+            (local_N_rank, local_N_accum, local_N_size_prod) = get_N(local_N_size)
+            local_marginal_mass_vectors = calc_marginal_mass_vectors(local_N_rank, local_N_size)
+            ## Calculation of current local optimal transportation costs
+            (opt_local_adjusted_cost_value, opt_local_mean_cost_value, opt_local_deviation_cost_value,
+            opt_local_intragroup_cost_value, opt_local_intragroup_cost_nparray_list, opt_local_intragroup_barycenter_nparray_list,
+            opt_local_intergroup_cost_value, opt_local_intergroup_P_tensor, opt_local_intergroup_weighted_cost_tensor,
+            opt_local_intergroup_u_vec_list, opt_local_intergroup_f_vec_list,
+            opt_local_intergroup_cost_tensor) = calc_adjusted_cost_value_with_bc(
+                opt_local_grouping_indexes_list, data_points_nparray, local_marginal_mass_vectors,
+                local_N_size, local_N_rank, local_N_accum, local_N_size_prod,
+                mean_penalty_weight, deviation_penalty_weight, order,
+                numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
+            )
+            old_local_adjusted_cost_value = opt_local_adjusted_cost_value
+            ## Enumeration of grouping patterns
+            ## (If N_rank is 2 or 3, all enumeration is used, and more than that, random selection is used.)
+            local_grouping_indexes_list_combinations = []
+            if local_N_rank == 2: ## It might be a good idea to have all the patterns ready in advance. (2^2-1=3)
+                numbers_list = list(range(sum(local_N_size)))
+                for sub_numbers_list_1 in itertools.combinations(numbers_list, local_N_size[0]):
+                    sub_numbers_list_2 = tuple(np.delete(numbers_list, sub_numbers_list_1, 0))
+                    temp_local_grouping_indexes_list = list((np.array(local_data_indexes))[list(sub_numbers_list_1+sub_numbers_list_2)])
+                    temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
+                    if temp_local_grouping_indexes_list != opt_local_grouping_indexes_list:
+                        local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
+            elif local_N_rank == 3: ## It might be a good idea to have all the patterns ready in advance. (2^3-1=7)
+                numbers_list = list(range(sum(local_N_size)))
+                for sub_numbers_list_1 in itertools.combinations(numbers_list, local_N_size[0]):
+                    temp_numbers_list = np.delete(numbers_list, sub_numbers_list_1, 0)
+                    for sub_numbers_list_2 in itertools.combinations(temp_numbers_list, local_N_size[1]):      
+                        sub_numbers_list_3 = tuple(np.delete(numbers_list, sub_numbers_list_1+sub_numbers_list_2, 0))
+                        temp_local_grouping_indexes_list = list((np.array(local_data_indexes))[list(sub_numbers_list_1+sub_numbers_list_2+sub_numbers_list_3)])
+                        temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
+                        if temp_local_grouping_indexes_list!= opt_local_grouping_indexes_list:
+                                local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
+            else:
+                for i in range(local_loop_max):
+                    temp_local_grouping_indexes_list = random.sample(local_data_indexes, len(local_data_indexes))
+                    temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
+                    if (temp_local_grouping_indexes_list!= opt_local_grouping_indexes_list) and (temp_local_grouping_indexes_list not in local_grouping_indexes_list_combinations):
+                                local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
+            ## Calculate the cost of local optimal transportation for each pattern of local grouping
+            opt_local_adjusted_cost_value = float('inf')
+            opt_local_grouping_indexes_list_list = []
+            for new_local_grouping_indexes_list in local_grouping_indexes_list_combinations:
+                (new_local_adjusted_cost_value, new_local_mean_cost_value, new_local_deviation_cost_value,
+                new_local_intragroup_cost_value, new_local_intragroup_cost_nparray_list, new_local_intragroup_barycenter_nparray_list,
+                new_local_intergroup_cost_value, new_local_intergroup_P_tensor, new_local_intergroup_weighted_cost_tenso,
+                new_local_intergroup_u_vec_list, new_local_intergroup_f_vec_list,
+                new_local_intergroup_cost_tensor) = calc_adjusted_cost_value_with_bc(
+                        new_local_grouping_indexes_list, data_points_nparray, local_marginal_mass_vectors,
+                        local_N_size, local_N_rank, local_N_accum, local_N_size_prod,
+                        mean_penalty_weight, deviation_penalty_weight, order,
+                        numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
+                )
+                if new_local_adjusted_cost_value < opt_local_adjusted_cost_value:
+                    opt_local_adjusted_cost_value = new_local_adjusted_cost_value
+                    opt_local_grouping_indexes_list_list = [new_local_grouping_indexes_list]
+                elif new_local_adjusted_cost_value == opt_local_adjusted_cost_value:
+                    opt_local_grouping_indexes_list_list.append(new_local_grouping_indexes_list)
+            opt_local_grouping_indexes_list = random.choice(opt_local_grouping_indexes_list_list)
+            random_number = random.random()
+            new_grouping_flag = (opt_local_adjusted_cost_value==0) or (random_number <= (old_local_adjusted_cost_value/opt_local_adjusted_cost_value))
+            if new_grouping_flag:
+                for group in range(local_N_rank):
+                    if local_N_size[group] == 1:
+                        new_grouping_indexes_list[group][cluster_1_multi_index[group]] = opt_local_grouping_indexes_list[group][0]
+                    else:
+                        new_grouping_indexes_list[group][cluster_1_multi_index[group]] = opt_local_grouping_indexes_list[group][0]
+                        new_grouping_indexes_list[group][cluster_2_multi_index[group]] = opt_local_grouping_indexes_list[group][1]
+        if new_grouping_flag:
+            ## Calculation of the cost of optimal transport
+            (new_adjusted_cost_value, new_mean_cost_value, new_deviation_cost_value,
+            new_intragroup_cost_value, new_intragroup_cost_nparray_list, new_intragroup_barycenter_nparray_list, 
+            new_intergroup_cost_value, new_intergroup_P_tensor, 
+            new_intergroup_weighted_cost_tensor, new_intergroup_u_vec_list, new_intergroup_f_vec_list, 
+            new_intergroup_cost_tensor) = calc_adjusted_cost_value_with_bc(
+                    new_grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                    N_size, N_rank, N_accum, N_size_prod,
+                    mean_penalty_weight, deviation_penalty_weight, order,
+                    numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
+            )
+        if show_info:
+            info_func(info_args, "new_grouping_indexes_list: " + str(new_grouping_indexes_list))
+            info_func(info_args, "new_adjusted_cost_value: " + str(new_adjusted_cost_value))
+        # if drawing_graphs:
+        #     (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
+        #                                                 new_grouping_indexes_list, data_points_nparray, 
+        #                                                 N_size, N_rank, N_accum, N_size_prod,
+        #                                                 viz2d_x, viz2d_y, new_intergroup_P_tensor)
+        #     # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
+        #     #                             viz2d_x, viz2d_y, line_width = 1, f_size=(4,3,1), f_title="Mid-calculation")
+        if new_adjusted_cost_value <= opt_adjusted_cost_value:
+            opt_grouping_indexes_list = copy.deepcopy(new_grouping_indexes_list)
+            opt_adjusted_cost_value = new_adjusted_cost_value
+            opt_mean_cost_value = new_mean_cost_value
+            opt_deviation_cost_value = new_deviation_cost_value
+            opt_intragroup_cost_value = new_intragroup_cost_value
+            opt_intragroup_cost_nparray_list = copy.deepcopy(new_intragroup_cost_nparray_list)
+            opt_intragroup_barycenter_nparray_list = copy.deepcopy(new_intragroup_barycenter_nparray_list)
+            opt_intergroup_cost_value = new_intergroup_cost_value
+            opt_intergroup_P_tensor = copy.deepcopy(new_intergroup_P_tensor)
+            opt_intergroup_weighted_cost_tensor = copy.deepcopy(new_intergroup_weighted_cost_tensor)
+            opt_intergroup_cost_tensor = copy.deepcopy(new_intergroup_cost_tensor)
+        ## Recording
+        iteration_number_list.append(loop+1)
+        elapsed_time = float(time.time() - start_time)
+        elapsed_time_list.append(elapsed_time)
+        new_adjusted_cost_trends_list.append(new_adjusted_cost_value)
+        opt_adjusted_cost_trends_list.append(opt_adjusted_cost_value)
+    ## info
+    if show_info:
+        info_func(info_args, "---------- opt")
+        info_func(info_args, "opt_grouping_indexes_list: " + str(init_grouping_indexes_list))
+        info_func(info_args, "opt_adjusted_cost_value: " + str(opt_adjusted_cost_value))
+        info_func(info_args, "  (opt_intergroup_cost_value, opt_intragroup_cost_value: " + str(opt_intergroup_cost_value) + ", " + str(opt_intragroup_cost_value) + ")")
+        info_func(info_args, "  (mean_penalty_weight*opt_mean_cost_value, deviation_penalty_weight*opt_deviation_cost_value : "
+              + str(mean_penalty_weight*opt_mean_cost_value) + ", " + str(deviation_penalty_weight*opt_deviation_cost_value) + ")")
+        ## Computation time
+        elapsed_hour = elapsed_time // 3600
+        elapsed_minute = (elapsed_time % 3600) // 60
+        elapsed_second = (elapsed_time % 3600 % 60)
+        info_func(info_args, "computation time:" + str(elapsed_hour).zfill(2) + ":" + str(elapsed_minute).zfill(2) + ":" + str(elapsed_second).zfill(2))
+    if drawing_graphs:
+        (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
+                                            opt_grouping_indexes_list, data_points_nparray, 
+                                            N_size, N_rank, N_accum, N_size_prod,
+                                            viz2d_x, viz2d_y, opt_intergroup_P_tensor)
+        # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, opt_grouping_indexes_list, data_points_nparray,
+        #                             viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Optimal value")
+        show_P_tensor(opt_intergroup_P_tensor, N_size, N_rank, N_accum, f_size=(4,3), f_title="Optimal value")
+     ## return
+    return (opt_grouping_indexes_list, opt_intergroup_P_tensor,
+            opt_adjusted_cost_value,
+            opt_intergroup_cost_value, opt_intragroup_cost_value,
+            opt_mean_cost_value, opt_deviation_cost_value,
+            iteration_number_list, elapsed_time_list,
+            new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+            viz2d_x, viz2d_y
+            )
+
+def gen_optimal_grouping_with_bc(data_points_nparray, N_size = None, standardization = True,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1, order = 2.0, 
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           main_show_info = True, main_drawing_graphs = True,
+                           sub_show_info = False, sub_drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
+                           viz2d_x = None, viz2d_y = None):
+    ## ## data_points_nparray: NumPy array consisting of data points
+    ## N_size: Tuple consisting of the number of elements in each group. If the variable is an integer, the tuple is automatically generated close to equally divided.
+    ## standardization = True ## Standardization
+    ## mean_penalty_weight = 0.1 ## Weight of mean_cost_value
+    ## deviation_penalty_weight = 0.1 ## Weight of deviation_cost_value
+    ## order = 2.0 ## Norm order: order=1.0 is the Manhattan distance and order=2 is the Euclidean distance. (If order==None, then order = 1.0 when cost_type=="mst" and order = 2.0 when cost_type=="bc".)
+    ## numerical_precision = 2e-8 ## Values whose absolute value is less than or equal to numerical_precision are treated as 0.
+    ## ot_speed = 0.02 ## Bigger means faster, smaller means stricter
+    ## ot_stopping_rule = 0.02 ## Criteria to stop updating "u". If the relative error of "u" is smaller than the stop criterion, it is terminated.
+    ## ot_loop_max = 200 ## Maximum number of iterations in calc_multi_ot_with_bc
+    ## tensor_tolerance = 2e-8 ## Tolerance of values when obtaining the tensor index from the value
+    ## global_loop_max = 100 ## Maximum number of iterations in calc_optimal_grouping
+    ## local_loop_max = 100 ## Upper bound on the number of enumerated patterns of local exchange
+    ## init_grouping_indexes_list = None ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
+    ## init_grouping_rand = True ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
+    ## search_method = "ex" ## "ex": exchange algorithm, "rand": random search, "hybrid": Hybrid of exchange algorithm and random search.
+    ## search_stopping_rule_err = 0.02 ## Criteria to stop searching by exchange algprithm.
+    ## search_stopping_rule_rep = 20 ## It stops when the relative difference in the optimal cost is search_stopping_rule_err or less for search_stopping_rule_rep consecutive periods.
+    ## main_show_info = True ## Flag whether information is displayed or not
+    ## main_drawing_graphs = True ## Flag whether or not to draw graphs
+    ## sub_show_info = False ## Flag whether information is displayed or not
+    ## sub_drawing_graphs = False ## Flag whether or not to draw graphs
+    ## info_func = (lambda info_args, txt: print(str(txt))) ## Function for displaying information
+    ## info_args = None ## Arguments for info_func
+    ## tensor_size_max = 4000 ## Maximum number of elements in the cost tensor. If N_size_prod > tensor_size_max, use an "approximate solution". 
+    ## group_size_max = 20 ## Maximum number of elements to be extracted if the group has a large number of elements. If min(N_size) > group_size_max, use an "approximate solution". 
+    ## loop_max_multiplier = 4 ## Multiplier of the number of loops in the "approximate solution". 
+    ## viz2d_x = None ## x-axis values for data visualization (If None, it is automatically calculated.)
+    ## viz2d_y = None ## y-axis values for data visualization (If None, it is automatically calculated.)
+    ## N_size
+    data_size = len(data_points_nparray)
+    if N_size is None:
+        info_func(info_args, "Warning: N_size is None.")
+        N_size = tuple(data_size)
+    if (type(N_size) == int):
+        if data_size > N_size:
+            (quotient, remainder) = divmod(data_size, N_size)
+            N_size = np.full(N_size, quotient)
+            for i in range(remainder):
+                N_size[i] = N_size[i] + 1
+            N_size = tuple(N_size)
+        else:
+            N_size = tuple(data_size)
+    elif (type(N_size) == tuple) or (type(N_size) == list):
+        N_size = tuple(N_size)
+        if data_size != sum(N_size):
+            info_func(info_args, "Warning: The sum of N_size does not match sample size.")
+            N_size = tuple(data_size)
+    else:
+        info_func(info_args, "Warning: N_size must be of type integer or tuple.")
+        N_size = tuple(data_size)
+    (N_rank, N_accum, N_size_prod) = get_N(N_size)
+    res_calc_optimal_grouping = None
+    ## Standardization
+    if standardization:
+        for i in range((data_points_nparray.shape)[1]):
+            if np.var(data_points_nparray[:,i]) > 0:
+                data_points_nparray[:,i] = (data_points_nparray[:,i] - np.mean(data_points_nparray[:,i]))/np.std(data_points_nparray[:,i])
+            else:
+                data_points_nparray[:,i] = data_points_nparray[:,i] - np.mean(data_points_nparray[:,i])
+    ## Setting Parameters
+    if (N_size_prod > tensor_size_max) or (min(N_size) > group_size_max): ## If True, use "approximate solution".
+        ## Initial value settings
+        if init_grouping_indexes_list is None:
+            new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=init_grouping_rand) ## True: Random grouping, False: Grouping in order
+        else:
+            new_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
+        if main_show_info:
+            info_func(info_args, "---------- new_grouping_indexes_list (initial value): " + str(new_grouping_indexes_list))
+        if main_drawing_graphs:
+            (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
+                                        viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Initial value")
+        for loop in range( loop_max_multiplier*N_rank ):
+            (group_1, group_2) = random.sample(list(range(N_rank)), 2)
+            sub_N_size = [N_size[group_1], N_size[group_2]]
+            group_1_sub_index = []
+            group_2_sub_index = []
+            if sub_N_size[0] > group_size_max:
+                group_1_sub_index = random.sample(list(range(sub_N_size[0])), group_size_max)
+                sub_N_size[0] = group_size_max
+            else:
+                group_1_sub_index = list(range(sub_N_size[0]))
+            if sub_N_size[1] > group_size_max:
+                group_2_sub_index = random.sample(list(range(sub_N_size[1])), group_size_max)
+                sub_N_size[1] = group_size_max
+            else:
+                group_2_sub_index = list(range(sub_N_size[1]))
+            sub_N_size = tuple(sub_N_size)
+            sub_data_index = list(np.array(new_grouping_indexes_list[group_1])[group_1_sub_index]) + list(np.array(new_grouping_indexes_list[group_2])[group_2_sub_index])
+            sub_data_points_nparray = data_points_nparray[sub_data_index]
+            (sub_N_rank, sub_N_accum, sub_N_size_prod) = get_N(sub_N_size)
+            res_calc_optimal_grouping = calc_optimal_grouping_with_bc(
+                sub_data_points_nparray, sub_N_size,
+                sub_N_rank, sub_N_accum, sub_N_size_prod,
+                mean_penalty_weight, deviation_penalty_weight, order,
+                numerical_precision,
+                ot_speed, ot_stopping_rule, ot_loop_max,
+                tensor_tolerance, global_loop_max, local_loop_max,
+                None, True, ## init_grouping_indexes_list, init_grouping_rand,
+                search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                sub_show_info, sub_drawing_graphs,
+                info_func,
+                info_args,
+                viz2d_x, viz2d_y)
+            sub_opt_grouping_indexes_list = res_calc_optimal_grouping[0]
+            group_1_sub_grouping_indexes_list = list(np.array(sub_data_index)[sub_opt_grouping_indexes_list[0]])
+            group_2_sub_grouping_indexes_list = list(np.array(sub_data_index)[sub_opt_grouping_indexes_list[1]])
+            for i, index in enumerate(group_1_sub_index):
+                new_grouping_indexes_list[group_1][index] = group_1_sub_grouping_indexes_list[i]
+            for i, index in enumerate(group_2_sub_index):
+                new_grouping_indexes_list[group_2][index] = group_2_sub_grouping_indexes_list[i]
+            if main_show_info:
+                info_func(info_args, "---------- loop (partial optimization): " + str(loop+1))
+                info_func(info_args, "---------- new_grouping_indexes_list (partial optimization): " + str(new_grouping_indexes_list))
+            if (main_drawing_graphs) and (loop == (2*N_rank-1)):
+                (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
+                                            viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Optimal value")
+        res_calc_optimal_grouping = (new_grouping_indexes_list, 
+                                     None, # opt_intergroup_P_tensor,
+                                     None, # opt_adjusted_cost_value,
+                                     None, # opt_intergroup_cost_value,
+                                     None, # opt_intragroup_cost_value,
+                                     None, # opt_mean_cost_value,
+                                     None, # opt_deviation_cost_value,
+                                     None, # iteration_number_list,
+                                     None, # elapsed_time_list,
+                                     None, # new_adjusted_cost_trends_list,
+                                     None, # opt_adjusted_cost_trends_list,
+                                     viz2d_x, viz2d_y)
+    else:
+        res_calc_optimal_grouping = calc_optimal_grouping_with_bc(data_points_nparray, N_size,
+                            N_rank, N_accum, N_size_prod,
+                            mean_penalty_weight, deviation_penalty_weight, order,
+                            numerical_precision,
+                            ot_speed, ot_stopping_rule, ot_loop_max,
+                            tensor_tolerance, global_loop_max, local_loop_max,
+                            init_grouping_indexes_list, init_grouping_rand,
+                            search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                            main_show_info, main_drawing_graphs,
+                            info_func,
+                            info_args,
+                            viz2d_x, viz2d_y)
+    ## res_calc_optimal_grouping:
+    ## (opt_grouping_indexes_list, opt_intergroup_P_tensor,
+    ##  opt_adjusted_cost_value,
+    ##  opt_intergroup_cost_value, opt_intragroup_cost_value,
+    ##  opt_mean_cost_value, opt_deviation_cost_value,
+    ##  iteration_number_list, elapsed_time_list,
+    ##  new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+    ##  viz2d_x, viz2d_y)
+    return res_calc_optimal_grouping
+
+def gen_optimal_grouping_from_csv_file_with_bc(input_filepath= "./members.csv", input_index_col = 0, output_filepath = "./grouping.csv",
+                           N_size = None,
+                           standardization = True,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1, order = 2.0, 
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           main_show_info = True, main_drawing_graphs = True,
+                           sub_show_info = False, sub_drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
+                           viz2d_x = None, viz2d_y = None):
+    ## input_filepath = "./members.csv" ## File path of the input file, in csv format.
+    ## input_index_col = 0 ## Column number with column name or column number in the csv file
+    ## output_filepath = "./grouping.csv" ##  File path of the output file, in csv format.
+    ############################
+    ## Loading data: loading csv files
+    df = pd.read_csv(filepath_or_buffer=input_filepath, index_col=input_index_col)
+    output_data = copy.deepcopy(df)
+    data_size = len(df)
+    ############################
+    ## Dummy variable processing: dummy variable for columns where dtype is object
+    df = pd.get_dummies(df, drop_first=True, dtype="float") # float64, uint8, bool
+    ############################
+    ##  Handling missing values: interpolate by median
+    for col in df.columns:
+        df[col] = df[col].fillna(df[col].median())
+    ############################
+    ## data_points_nparray: NumPy array consisting of data points
+    data_points_nparray_org = np.array(df.values)
+    data_points_nparray = copy.deepcopy(data_points_nparray_org) ## data_points_nparray: NumPy array consisting of data points
+    data_points_nparray = data_points_nparray.astype(float)
+    ###########################################
+    ## Data Standardization
+    if standardization:
+        for i in range((data_points_nparray.shape)[1]):
+            if np.var(data_points_nparray[:,i]) > 0:
+                data_points_nparray[:,i] = (data_points_nparray[:,i] - np.mean(data_points_nparray[:,i]))/np.std(data_points_nparray[:,i])
+            else:
+                data_points_nparray[:,i] = data_points_nparray[:,i] - np.mean(data_points_nparray[:,i])
+    ###########################################
+    ## Division and Search
+    (opt_grouping_indexes_list, opt_intergroup_P_tensor,
+     opt_adjusted_cost_value,
+     opt_intergroup_cost_value, opt_intragroup_cost_value,
+     opt_mean_cost_value, opt_deviation_cost_value,
+     iteration_number_list, elapsed_time_list,
+     new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+     viz2d_x, viz2d_y
+    ) = gen_optimal_grouping_with_bc(data_points_nparray, N_size, standardization,
+                            mean_penalty_weight, deviation_penalty_weight, order,
+                            numerical_precision,
+                            ot_speed, ot_stopping_rule, ot_loop_max,
+                            tensor_tolerance, global_loop_max, local_loop_max,
+                            init_grouping_indexes_list, init_grouping_rand,
+                            search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                            main_show_info, main_drawing_graphs,
+                            sub_show_info, sub_drawing_graphs,
+                            info_func, info_args,
+                            tensor_size_max, group_size_max, loop_max_multiplier,
+                            viz2d_x, viz2d_y)
+    ###########################################
+    ## Output grouping results to csv file
+    group_labels_list = np.zeros(data_size)
+    group = 0
+    for members_list in opt_grouping_indexes_list:
+        for member in members_list:
+            group_labels_list[member] = int(group)
+        group = group + 1
+    output_data.insert(loc=0, column="Group", value=group_labels_list.astype(int), allow_duplicates=True)
+    if (viz2d_x is not None) and (viz2d_y is not None):
+        output_data.insert(loc=1, column="viz2d_x", value=viz2d_x.astype(float), allow_duplicates=True)
+        output_data.insert(loc=2, column="viz2d_y", value=viz2d_y.astype(float), allow_duplicates=True)
+    output_data.to_csv(output_filepath)
+    ###########################################
+    ## Return
+    return (opt_grouping_indexes_list,
+            opt_intergroup_P_tensor,
+            opt_adjusted_cost_value,
+            opt_intergroup_cost_value, opt_intragroup_cost_value,
+            opt_mean_cost_value, opt_deviation_cost_value,
+            iteration_number_list, elapsed_time_list,
+            new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+            output_data, viz2d_x, viz2d_y
+    )
+
+## Functions for calculating optrimal grouping with minimum spanning tree (MST)
+def calc_distance_matrix(data_points: List[np.ndarray], order: float) -> np.ndarray:
+    n = len(data_points)
+    p = len(data_points[0]) ## Assuming all points have the same dimensionality
+    ## Initialize an empty distance matrix
+    distance_matrix = np.zeros((n, n))
+    ## Calculate pairwise distances
+    for i in range(n):
+        for j in range(i + 1, n):
+            distance = np.linalg.norm(np.array(data_points[i]) - np.array(data_points[j]), ord = order)
+            distance_matrix[i, j] = distance
+            distance_matrix[j, i] = distance
+    return distance_matrix
+
+def calc_minimum_spanning_tree(distance_matrix: np.ndarray) -> Tuple[np.ndarray, float]:
+    n = distance_matrix.shape[0]
+    visited = [False] * n
+    adjacency_matrix = np.zeros((n, n))
+    total_weight = 0.0
+    ## Start with the first node
+    visited[0] = True
+    for _ in range(n - 1):
+        min_edge_weight = float('inf')
+        u, v = -1, -1
+        ## Find the minimum weight edge connecting visited and unvisited nodes
+        for i in range(n):
+            if visited[i]:
+                for j in range(n):
+                    if not visited[j] and distance_matrix[i, j] < min_edge_weight:
+                        min_edge_weight = distance_matrix[i, j]
+                        u, v = i, j
+        ## Add the edge to the MST
+        adjacency_matrix[u, v] = 1
+        adjacency_matrix[v, u] = 1
+        total_weight += min_edge_weight
+        visited[v] = True
+    return adjacency_matrix, total_weight
+
+def calc_distance_matrix_and_minimum_spanning_tree(data_points: List[np.ndarray], order: float) -> Tuple[np.ndarray, np.ndarray, float]:
+    distance_matrix = calc_distance_matrix(data_points, order)
+    (adjacency_matrix, total_weight) = calc_minimum_spanning_tree(distance_matrix)
+    return (distance_matrix, adjacency_matrix, total_weight)
+
+def calc_intergroup_cost_tensor_with_mst(grouping_indexes_list, data_points_nparray, marginal_mass_vectors,
+                                N_size, N_rank, N_accum, N_size_prod, order = 1.0,
+                                numerical_precision = 2e-8):
+    cost_tensor = np.zeros(N_size_prod)
+    for m_index in np.ndindex(N_size):
+        temp_data_points_nparray = []
+        temp_cost_value = 0
+        for group in range(N_rank):
+            temp_data_points_nparray.append(data_points_nparray[grouping_indexes_list[group][m_index[group]]])
+        ## Cost: MST
+        (distance_nparray, adjacency_nparray,
+         total_weight) = calc_distance_matrix_and_minimum_spanning_tree(
+             temp_data_points_nparray, order)
+        temp_cost_value = total_weight
+        temp_index = get_tensor_flattened_index_from_multi_index(m_index, N_rank, N_accum)
+        cost_tensor[temp_index] = temp_cost_value
+    normalized_cost_tensor = copy.deepcopy(cost_tensor)
+    max_cost_value = max(cost_tensor)
+    if max_cost_value > numerical_precision:
+        normalized_cost_tensor = normalized_cost_tensor/max_cost_value
+    return (cost_tensor, normalized_cost_tensor)
+
+def calc_intergroup_cost_value_with_mst(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                               N_size, N_rank, N_accum, N_size_prod, order = 1.0,
+                               numerical_precision = 2e-8, ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200):
+    (intergroup_cost_tensor, normalized_intergroup_cost_tensor) = calc_intergroup_cost_tensor_with_mst(
+        grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+        N_size, N_rank, N_accum, N_size_prod, order,
+        numerical_precision)
+    (intergroup_cost_value, intergroup_P_tensor, intergroup_weighted_cost_tensor, 
+     intergroup_u_vec_list, intergroup_f_vec_list) = calc_multi_ot(
+        marginal_mass_vectors, intergroup_cost_tensor, normalized_intergroup_cost_tensor, N_size, N_rank, N_accum, N_size_prod,
+        numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max)
+    return (intergroup_cost_value, intergroup_P_tensor, intergroup_weighted_cost_tensor, 
+            intergroup_u_vec_list, intergroup_f_vec_list, intergroup_cost_tensor)
+
+def calc_intragroup_cost_list_with_mst(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                                      N_size, N_rank, N_accum, N_size_prod, order = 1.0):
+    distance_nparray_list = []
+    adjacency_nparray_list = []
+    cost_list = []
+    for group, size in enumerate(N_size):
+        temp_data_points_nparray = []
+        for element in range(size):
+            temp_data_points_nparray.append(data_points_nparray[grouping_indexes_list[group][element]])
+        ## Cost : MST
+        (distance_nparray, adjacency_nparray,
+         total_weight) = calc_distance_matrix_and_minimum_spanning_tree(
+            temp_data_points_nparray, order)
+        distance_nparray_list.append(distance_nparray)
+        adjacency_nparray_list.append(adjacency_nparray)
+        cost_list.append(total_weight)
+    return (distance_nparray_list, adjacency_nparray_list, cost_list)
+
+def calc_intragroup_cost_value_with_mst(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                               N_size, N_rank, N_accum, N_size_prod, order = 1.0):
+    intragroup_cost_value = 0
+    (intragroup_distance_nparray_list, intragroup_adjacency_nparray_list,
+     intragroup_cost_list) = calc_intragroup_cost_list_with_mst(
+        grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+        N_size, N_rank, N_accum, N_size_prod, order)
+    intragroup_cost_value = sum(intragroup_cost_list)/N_rank
+    return (intragroup_distance_nparray_list, intragroup_adjacency_nparray_list,
+            intragroup_cost_list, intragroup_cost_value)
+
+def calc_mean_cost_value_with_mst(grouping_indexes_list, data_points_nparray,
+                            N_size, N_rank, N_accum, N_size_prod, order = 1.0):
+    barycenter_nparray_list = []
+    for group, size in enumerate(N_size):
+        temp_data_points_nparray = []
+        for element in range(size):
+            temp_data_points_nparray.append(data_points_nparray[grouping_indexes_list[group][element]])
+        temp_barycenter_nparray = np.mean(temp_data_points_nparray, axis=0)
+        barycenter_nparray_list.append(temp_barycenter_nparray)
+    barycenter_nparray_list = np.array(barycenter_nparray_list)
+    ## Cost: MST
+    (distance_nparray, adjacency_nparray,
+        mean_cost_value) = calc_distance_matrix_and_minimum_spanning_tree(
+            barycenter_nparray_list, order)
+    mean_cost_value = mean_cost_value/N_rank
+    return (barycenter_nparray_list, mean_cost_value)
+
+def calc_deviation_cost_value_with_mst(intragroup_distance_nparray_list):
+    return (max(intragroup_distance_nparray_list) - min(intragroup_distance_nparray_list))
+
+def calc_aggregate_statistical_cost_list_with_mst(grouping_indexes_list, data_points_nparray,
+                                                  intragroup_distance_nparray_list, intragroup_adjacency_nparray_list, intragroup_cost_list,
+                                                  N_size, N_rank, N_accum, N_size_prod, order = 1.0):
+    (barycenter_nparray_list, mean_cost_value) = calc_mean_cost_value_with_mst(grouping_indexes_list, data_points_nparray,
+                                                                               N_size, N_rank, N_accum, N_size_prod, order)
+    deviation_cost_value = calc_deviation_cost_value_with_mst(intragroup_cost_list)
+    return (mean_cost_value, deviation_cost_value)
+
+def calc_adjusted_cost_value_with_mst(grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                             N_size, N_rank, N_accum, N_size_prod, 
+                             mean_penalty_weight = 0.1, deviation_penalty_weight=0.8, order = 1.0,
+                             numerical_precision = 2e-8, ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200):
+    ## intergroup_cost_value
+    (intergroup_cost_value, intergroup_P_tensor, intergroup_weighted_cost_tensor, 
+    intergroup_u_vec_list, intergroup_f_vec_list,
+    intergroup_cost_tensor) = calc_intergroup_cost_value_with_mst(
+        grouping_indexes_list, data_points_nparray, marginal_mass_vectors,
+        N_size, N_rank, N_accum, N_size_prod, order,
+        numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
+        )
+    ## intragroup_cost_value
+    (intragroup_distance_nparray_list, intragroup_adjacency_nparray_list,
+            intragroup_cost_list, intragroup_cost_value) = calc_intragroup_cost_value_with_mst(
+        grouping_indexes_list, data_points_nparray, marginal_mass_vectors,
+        N_size, N_rank, N_accum, N_size_prod
+        )
+    ## aggregate_statistical_cost_value
+    (mean_cost_value, deviation_cost_value) = calc_aggregate_statistical_cost_list_with_mst(grouping_indexes_list, data_points_nparray,
+                                                                                            intragroup_distance_nparray_list, intragroup_adjacency_nparray_list, intragroup_cost_list, 
+                                                                                            N_size, N_rank, N_accum, N_size_prod, order = 1.0)
+    ## adjusted_cost_value = (intergroup_cost_value + mean_cost_value + deviation_cost_value) / (intragroup_cost_value)
+    adjusted_cost_value = 0
+    if abs(intragroup_cost_value) < numerical_precision:
+        adjusted_cost_value = np.inf
+    else:
+        adjusted_cost_value = (intergroup_cost_value + mean_penalty_weight*mean_cost_value + deviation_penalty_weight*deviation_cost_value)/(intragroup_cost_value)
+    ## return
+    return (adjusted_cost_value, mean_cost_value, deviation_cost_value,
+            intragroup_cost_value, intragroup_distance_nparray_list, intragroup_adjacency_nparray_list, intragroup_cost_list,
+            intergroup_cost_value, intergroup_P_tensor, intergroup_weighted_cost_tensor, 
+            intergroup_u_vec_list, intergroup_f_vec_list, intergroup_cost_tensor)
+
+def calc_optimal_grouping_with_mst(data_points_nparray, N_size,
+                           N_rank = None, N_accum = None, N_size_prod = None,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.8, order = 1.0,
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 10, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           show_info = False, drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           viz2d_x = None, viz2d_y = None):
+    ## N_rank, N_accum, N_size_prod, marginal_mass_vectors
+    if (N_rank is None) or (N_accum is None) or (N_size_prod is None):
+        (N_rank, N_accum, N_size_prod) = get_N(N_size)
+    marginal_mass_vectors = calc_marginal_mass_vectors(N_rank, N_size)
+    ## Initial value settings
+    if init_grouping_indexes_list is None:
+        init_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=init_grouping_rand) ## True: Random grouping, False: Grouping in order
+    ## Calculation of optimal transportation costs under initial conditions
+    (init_adjusted_cost_value, init_mean_cost_value, init_deviation_cost_value,
+    init_intragroup_cost_value, init_intragroup_distance_nparray_list, init_intragroup_adjacency_nparray_list, init_intragroup_cost_list,
+    init_intergroup_cost_value, init_intergroup_P_tensor, init_intergroup_weighted_cost_tensor,
+    init_intergroup_u_vec_list, init_intergroup_f_vec_list,
+    init_intergroup_cost_tensor) = calc_adjusted_cost_value_with_mst(init_grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
+                             N_size, N_rank, N_accum, N_size_prod, 
+                             mean_penalty_weight, deviation_penalty_weight, order,
+                             numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max)
+    ## Preparation for recording
+    iteration_number_list = [0]
+    elapsed_time_list = [0]
+    new_adjusted_cost_trends_list = [init_adjusted_cost_value]
+    opt_adjusted_cost_trends_list = [init_adjusted_cost_value]
+    start_time = time.time()
+    ## info
+    if show_info:
+        info_func(info_args, "---------- init")
+        info_func(info_args, "init_grouping_indexes_list: " + str(init_grouping_indexes_list))
+        info_func(info_args, "init_adjusted_cost_value: " + str(init_adjusted_cost_value))
+        info_func(info_args, "  (init_intergroup_cost_value, init_intragroup_cost_value: " + str(init_intergroup_cost_value) + ", " + str(init_intragroup_cost_value) + ")")
+        info_func(info_args, "  (mean_penalty_weight*init_mean_cost_value, deviation_penalty_weight*init_deviation_cost_value : " 
+              + str(mean_penalty_weight*init_mean_cost_value) + ", " + str(deviation_penalty_weight*init_deviation_cost_value) + ")")
+    if drawing_graphs:
+        (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
+                                                                init_grouping_indexes_list, data_points_nparray, 
+                                                                N_size, N_rank, N_accum, N_size_prod,
+                                                                viz2d_x, viz2d_y, init_intergroup_P_tensor)
+        # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, init_grouping_indexes_list, data_points_nparray,
+        #                             viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Initial Value")
+        show_P_tensor(init_intergroup_P_tensor, N_size, N_rank, N_accum, f_size=(4,3), f_title="Initial Value")
+    ## opt
+    opt_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
+    opt_adjusted_cost_value = init_adjusted_cost_value
+    opt_mean_cost_value = init_mean_cost_value
+    opt_deviation_cost_value = init_deviation_cost_value
+    opt_intragroup_cost_value = init_intragroup_cost_value
+    opt_intergroup_cost_value = init_intergroup_cost_value
+    opt_intergroup_P_tensor = copy.deepcopy(init_intergroup_P_tensor)
+    ## new
+    new_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
+    new_adjusted_cost_value = init_adjusted_cost_value
+    new_mean_cost_value = init_mean_cost_value
+    new_deviation_cost_value = init_deviation_cost_value
+    new_intragroup_cost_value = init_intragroup_cost_value
+    new_intergroup_cost_value = init_intergroup_cost_value
+    new_intergroup_P_tensor = copy.deepcopy(init_intergroup_P_tensor)
+    new_intergroup_weighted_cost_tensor = copy.deepcopy(init_intergroup_weighted_cost_tensor)
+    new_intergroup_cost_tensor = copy.deepcopy(init_intergroup_cost_tensor)
+    ## Search for optimal value
+    new_grouping_flag = True
+    search_stopping_rule_counter = 0
+    for loop in range(global_loop_max):
+        if show_info:
+            info_func(info_args, "---------- loop: " + str(loop+1))
+        search_stopping_rule_counter = search_stopping_rule_counter + 1
+        if search_method=="rand": ## search_method=="rand"
+            new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=True) ## True: Random grouping, False: Grouping in order
+        else: ## search_method=="ex" or search_method=="hybrid"
+            if (search_stopping_rule_counter >= search_stopping_rule_rep):
+                opt_adjusted_cost_diff_list = opt_adjusted_cost_trends_list[(len(opt_adjusted_cost_trends_list)-search_stopping_rule_rep):]
+                old_adjusted_cost_value = opt_adjusted_cost_diff_list[0]
+                opt_adjusted_cost_diff_list = abs(np.array(opt_adjusted_cost_diff_list) - old_adjusted_cost_value)
+                opt_adjusted_cost_diff_list = opt_adjusted_cost_diff_list/(abs(old_adjusted_cost_value)+numerical_precision)
+                opt_adjusted_cost_diff_max = max(opt_adjusted_cost_diff_list)
+                if opt_adjusted_cost_diff_max <= search_stopping_rule_err:
+                    if search_method=="hybrid": ## search_method=="hybrid"
+                        search_stopping_rule_counter = 0
+                        new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=True) ## True: Random grouping, False: Grouping in order
+                        if show_info:
+                            info_func(info_args, "Grouping has been shuffled.")
+                    else: ## search_method=="ex"
+                        if show_info:
+                            info_func(info_args, "The stopping criterion determined that convergence to the optimum value was achieved.")
+                        break
+            ## Local grouping: Select two clusters and perform an exchange between the two clusters
+            probability_tensor = copy.deepcopy(new_intergroup_weighted_cost_tensor)
+            cluster_1_value = (random.choices(probability_tensor, k=1, weights=probability_tensor))[0]
+            cluster_1_flattened_index_list = get_tensor_flattened_index_list_from_value(probability_tensor, cluster_1_value, tensor_tolerance)
+            cluster_1_flattened_index = random.choice(cluster_1_flattened_index_list)
+            cluster_1_multi_index = get_tensor_multi_index_from_flattened_index(cluster_1_flattened_index, N_rank, N_accum)
+            probability_tensor[cluster_1_flattened_index] = 0
+            cluster_2_value = (random.choices(probability_tensor, k=1, weights=probability_tensor))[0]
+            cluster_2_flattened_index_list = get_tensor_flattened_index_list_from_value(probability_tensor, cluster_2_value, tensor_tolerance)
+            cluster_2_flattened_index = random.choice(cluster_2_flattened_index_list)
+            cluster_2_multi_index = get_tensor_multi_index_from_flattened_index(cluster_2_flattened_index, N_rank, N_accum)
+            ## Preparation for local grouping
+            local_N_size = []
+            local_data_indexes = []
+            opt_local_grouping_indexes_list = []
+            ## local_N_size, local_data_indexes, opt_local_grouping_indexes_list, local_N_rank, local_N_accum, local_N_size_prod, local_marginal_mass_vectors
+            for local_group in range(N_rank):
+                if cluster_1_multi_index[local_group] == cluster_2_multi_index[local_group]:
+                    local_N_size.append(1)
+                    temp_index = new_grouping_indexes_list[local_group][cluster_1_multi_index[local_group]]
+                    local_data_indexes.append(temp_index)
+                    opt_local_grouping_indexes_list.append([temp_index])
+                else:
+                    local_N_size.append(2)
+                    temp_index_1 = new_grouping_indexes_list[local_group][cluster_1_multi_index[local_group]]
+                    temp_index_2 = new_grouping_indexes_list[local_group][cluster_2_multi_index[local_group]]
+                    local_data_indexes.append(temp_index_1)
+                    local_data_indexes.append(temp_index_2)
+                    opt_local_grouping_indexes_list.append([temp_index_1, temp_index_2])
+            local_N_size = tuple(local_N_size)
+            (local_N_rank, local_N_accum, local_N_size_prod) = get_N(local_N_size)
+            local_marginal_mass_vectors = calc_marginal_mass_vectors(local_N_rank, local_N_size)
+            ## Calculation of current local optimal transportation costs
+            (opt_local_adjusted_cost_value, opt_local_mean_cost_value, opt_local_deviation_cost_value,
+            opt_local_intragroup_cost_value, opt_local_intragroup_distance_nparray_list, opt_local_intragroup_adjacency_nparray_list, opt_local_intragroup_cost_list,
+            opt_local_intergroup_cost_value, opt_local_intergroup_P_tensor, opt_local_intergroup_weighted_cost_tensor,
+            opt_local_intergroup_u_vec_list, opt_local_intergroup_f_vec_list,
+            opt_local_intergroup_cost_tensor) = calc_adjusted_cost_value_with_mst(opt_local_grouping_indexes_list, data_points_nparray,
+                                                                                  local_marginal_mass_vectors,
+                                                                                  local_N_size, local_N_rank, local_N_accum, local_N_size_prod,
+                                                                                  mean_penalty_weight, deviation_penalty_weight, order,
+                                                                                  numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max)
+            old_local_adjusted_cost_value = opt_local_adjusted_cost_value
+            ## Enumeration of grouping patterns
+            ## (If N_rank is 2 or 3, all enumeration is used, and more than that, random selection is used.)
+            local_grouping_indexes_list_combinations = []
+            if local_N_rank == 2: ## It might be a good idea to have all the patterns ready in advance. (2^2-1=3)
+                numbers_list = list(range(sum(local_N_size)))
+                for sub_numbers_list_1 in itertools.combinations(numbers_list, local_N_size[0]):
+                    sub_numbers_list_2 = tuple(np.delete(numbers_list, sub_numbers_list_1, 0))
+                    temp_local_grouping_indexes_list = list((np.array(local_data_indexes))[list(sub_numbers_list_1+sub_numbers_list_2)])
+                    temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
+                    if temp_local_grouping_indexes_list != opt_local_grouping_indexes_list:
+                        local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
+            elif local_N_rank == 3: ## It might be a good idea to have all the patterns ready in advance. (2^3-1=7)
+                numbers_list = list(range(sum(local_N_size)))
+                for sub_numbers_list_1 in itertools.combinations(numbers_list, local_N_size[0]):
+                    temp_numbers_list = np.delete(numbers_list, sub_numbers_list_1, 0)
+                    for sub_numbers_list_2 in itertools.combinations(temp_numbers_list, local_N_size[1]):      
+                        sub_numbers_list_3 = tuple(np.delete(numbers_list, sub_numbers_list_1+sub_numbers_list_2, 0))
+                        temp_local_grouping_indexes_list = list((np.array(local_data_indexes))[list(sub_numbers_list_1+sub_numbers_list_2+sub_numbers_list_3)])
+                        temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
+                        if temp_local_grouping_indexes_list!= opt_local_grouping_indexes_list:
+                                local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
+            else:
+                for i in range(local_loop_max):
+                    temp_local_grouping_indexes_list = random.sample(local_data_indexes, len(local_data_indexes))
+                    temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
+                    if (temp_local_grouping_indexes_list!= opt_local_grouping_indexes_list) and (temp_local_grouping_indexes_list not in local_grouping_indexes_list_combinations):
+                                local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
+            ## Calculate the cost of local optimal transportation for each pattern of local grouping
+            opt_local_adjusted_cost_value = float('inf')
+            opt_local_grouping_indexes_list_list = []
+            for new_local_grouping_indexes_list in local_grouping_indexes_list_combinations:
+                (new_local_adjusted_cost_value, new_local_mean_cost_value, new_local_deviation_cost_value,
+                new_local_intragroup_cost_value, new_local_intragroup_distance_nparray_list, new_local_intragroup_adjacency_nparray_list, new_local_intragroup_cost_list,
+                new_local_intergroup_cost_value, new_local_intergroup_P_tensor, new_local_intergroup_weighted_cost_tenso,
+                new_local_intergroup_u_vec_list, new_local_intergroup_f_vec_list,
+                new_local_intergroup_cost_tensor) = calc_adjusted_cost_value_with_mst(new_local_grouping_indexes_list, data_points_nparray,
+                                                                                  local_marginal_mass_vectors,
+                                                                                  local_N_size, local_N_rank, local_N_accum, local_N_size_prod,
+                                                                                  mean_penalty_weight, deviation_penalty_weight, order,
+                                                                                  numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max)
+                if new_local_adjusted_cost_value < opt_local_adjusted_cost_value:
+                    opt_local_adjusted_cost_value = new_local_adjusted_cost_value
+                    opt_local_grouping_indexes_list_list = [new_local_grouping_indexes_list]
+                elif new_local_adjusted_cost_value == opt_local_adjusted_cost_value:
+                    opt_local_grouping_indexes_list_list.append(new_local_grouping_indexes_list)
+            opt_local_grouping_indexes_list = random.choice(opt_local_grouping_indexes_list_list)
+            random_number = random.random()
+            new_grouping_flag = (opt_local_adjusted_cost_value==0) or (random_number <= (old_local_adjusted_cost_value/opt_local_adjusted_cost_value))
+            if new_grouping_flag:
+                for group in range(local_N_rank):
+                    if local_N_size[group] == 1:
+                        new_grouping_indexes_list[group][cluster_1_multi_index[group]] = opt_local_grouping_indexes_list[group][0]
+                    else:
+                        new_grouping_indexes_list[group][cluster_1_multi_index[group]] = opt_local_grouping_indexes_list[group][0]
+                        new_grouping_indexes_list[group][cluster_2_multi_index[group]] = opt_local_grouping_indexes_list[group][1]
+        if new_grouping_flag:
+            ## Calculation of the cost of optimal transport
+            (new_adjusted_cost_value, new_mean_cost_value, new_deviation_cost_value,
+            new_intragroup_cost_value, new_intragroup_distance_nparray_list, new_intragroup_adjacency_nparray_list, new_intragroup_cost_list,
+            new_intergroup_cost_value, new_intergroup_P_tensor, 
+            new_intergroup_weighted_cost_tensor, new_intergroup_u_vec_list, new_intergroup_f_vec_list, 
+            new_intergroup_cost_tensor) = calc_adjusted_cost_value_with_mst(new_grouping_indexes_list, data_points_nparray,
+                                                                            marginal_mass_vectors,
+                                                                            N_size, N_rank, N_accum, N_size_prod,
+                                                                            mean_penalty_weight, deviation_penalty_weight, order,
+                                                                            numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max)
+        if show_info:
+            info_func(info_args, "new_grouping_indexes_list: " + str(new_grouping_indexes_list))
+            info_func(info_args, "new_adjusted_cost_value: " + str(new_adjusted_cost_value))
+        # if drawing_graphs:
+        #     (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
+        #                                                 new_grouping_indexes_list, data_points_nparray, 
+        #                                                 N_size, N_rank, N_accum, N_size_prod,
+        #                                                 viz2d_x, viz2d_y, new_intergroup_P_tensor)
+        #     # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
+        #     #                             viz2d_x, viz2d_y, line_width = 1, f_size=(4,3,1), f_title="Mid-calculation")
+        if new_adjusted_cost_value <= opt_adjusted_cost_value:
+            opt_grouping_indexes_list = copy.deepcopy(new_grouping_indexes_list)
+            opt_adjusted_cost_value = new_adjusted_cost_value
+            opt_mean_cost_value = new_mean_cost_value
+            opt_deviation_cost_value = new_deviation_cost_value
+            opt_intragroup_cost_value = new_intragroup_cost_value
+            opt_intergroup_cost_value = new_intergroup_cost_value
+            opt_intergroup_P_tensor = copy.deepcopy(new_intergroup_P_tensor)
+        ## Recording
+        iteration_number_list.append(loop+1)
+        elapsed_time = float(time.time() - start_time)
+        elapsed_time_list.append(elapsed_time)
+        new_adjusted_cost_trends_list.append(new_adjusted_cost_value)
+        opt_adjusted_cost_trends_list.append(opt_adjusted_cost_value)
+    ## info
+    if show_info:
+        info_func(info_args, "---------- opt")
+        info_func(info_args, "opt_grouping_indexes_list: " + str(init_grouping_indexes_list))
+        info_func(info_args, "opt_adjusted_cost_value: " + str(opt_adjusted_cost_value))
+        info_func(info_args, "  (opt_intergroup_cost_value, opt_intragroup_cost_value: " + str(opt_intergroup_cost_value) + ", " + str(opt_intragroup_cost_value) + ")")
+        info_func(info_args, "  (mean_penalty_weight*opt_mean_cost_value, deviation_penalty_weight*opt_deviation_cost_value : "
+              + str(mean_penalty_weight*opt_mean_cost_value) + ", " + str(deviation_penalty_weight*opt_deviation_cost_value) + ")")
+        ## Computation time
+        elapsed_hour = elapsed_time // 3600
+        elapsed_minute = (elapsed_time % 3600) // 60
+        elapsed_second = (elapsed_time % 3600 % 60)
+        info_func(info_args, "computation time:" + str(elapsed_hour).zfill(2) + ":" + str(elapsed_minute).zfill(2) + ":" + str(elapsed_second).zfill(2))
+    if drawing_graphs:
+        (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
+                                            opt_grouping_indexes_list, data_points_nparray, 
+                                            N_size, N_rank, N_accum, N_size_prod,
+                                            viz2d_x, viz2d_y, opt_intergroup_P_tensor)
+        # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, opt_grouping_indexes_list, data_points_nparray,
+        #                             viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Optimal value")
+        show_P_tensor(opt_intergroup_P_tensor, N_size, N_rank, N_accum, f_size=(4,3), f_title="Optimal value")
+     ## return
+    return (opt_grouping_indexes_list, opt_intergroup_P_tensor,
+            opt_adjusted_cost_value,
+            opt_intergroup_cost_value, opt_intragroup_cost_value,
+            opt_mean_cost_value, opt_deviation_cost_value,
+            iteration_number_list, elapsed_time_list,
+            new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+            viz2d_x, viz2d_y
+            )
+
+def gen_optimal_grouping_with_mst(data_points_nparray, N_size = None, standardization = True,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1, order = 1.0,
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           main_show_info = True, main_drawing_graphs = True,
+                           sub_show_info = False, sub_drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
+                           viz2d_x = None, viz2d_y = None):
+    ## ## data_points_nparray: NumPy array consisting of data points
+    ## N_size: Tuple consisting of the number of elements in each group. If the variable is an integer, the tuple is automatically generated close to equally divided.
+    ## standardization = True ## Standardization
+    ## mean_penalty_weight = 0.1 ## Weight of mean_cost_value
+    ## deviation_penalty_weight = 0.8 ## Weight of deviation_cost_value
+    ## order = 1.0 ## Norm order: order=1.0 is the Manhattan distance and order=2 is the Euclidean distance. (If order==None, then order = 1.0 when cost_type=="mst" and order = 2.0 when cost_type=="bc".)
+    ## numerical_precision = 2e-8 ## Values whose absolute value is less than or equal to numerical_precision are treated as 0.
+    ## ot_speed = 0.02 ## Bigger means faster, smaller means stricter
+    ## ot_stopping_rule = 0.02 ## Criteria to stop updating "u". If the relative error of "u" is smaller than the stop criterion, it is terminated.
+    ## ot_loop_max = 200 ## Maximum number of iterations in calc_multi_ot
+    ## tensor_tolerance = 2e-8 ## Tolerance of values when obtaining the tensor index from the value
+    ## global_loop_max = 100 ## Maximum number of iterations in calc_optimal_grouping
+    ## local_loop_max = 100 ## Upper bound on the number of enumerated patterns of local exchange
+    ## init_grouping_indexes_list = None ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
+    ## init_grouping_rand = True ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
+    ## search_method = "ex" ## "ex": exchange algorithm, "rand": random search, "hybrid": Hybrid of exchange algorithm and random search.
+    ## search_stopping_rule_err = 0.02 ## Criteria to stop searching by exchange algprithm.
+    ## search_stopping_rule_rep = 20 ## It stops when the relative difference in the optimal cost is search_stopping_rule_err or less for search_stopping_rule_rep consecutive periods.
+    ## main_show_info = True ## Flag whether information is displayed or not
+    ## main_drawing_graphs = True ## Flag whether or not to draw graphs
+    ## sub_show_info = False ## Flag whether information is displayed or not
+    ## sub_drawing_graphs = False ## Flag whether or not to draw graphs
+    ## info_func = (lambda info_args, txt: print(str(txt))) ## Function for displaying information
+    ## info_args = None ## Arguments for info_func
+    ## tensor_size_max = 4000 ## Maximum number of elements in the cost tensor. If N_size_prod > tensor_size_max, use an "approximate solution". 
+    ## group_size_max = 20 ## Maximum number of elements to be extracted if the group has a large number of elements. If min(N_size) > group_size_max, use an "approximate solution". 
+    ## loop_max_multiplier = 4 ## Multiplier of the number of loops in the "approximate solution". 
+    ## viz2d_x = None ## x-axis values for data visualization (If None, it is automatically calculated.)
+    ## viz2d_y = None ## y-axis values for data visualization (If None, it is automatically calculated.)
+    ## N_size
+    data_size = len(data_points_nparray)
+    if N_size is None:
+        info_func(info_args, "Warning: N_size is None.")
+        N_size = tuple(data_size)
+    if (type(N_size) == int):
+        if data_size > N_size:
+            (quotient, remainder) = divmod(data_size, N_size)
+            N_size = np.full(N_size, quotient)
+            for i in range(remainder):
+                N_size[i] = N_size[i] + 1
+            N_size = tuple(N_size)
+        else:
+            N_size = tuple(data_size)
+    elif (type(N_size) == tuple) or (type(N_size) == list):
+        N_size = tuple(N_size)
+        if data_size != sum(N_size):
+            info_func(info_args, "Warning: The sum of N_size does not match sample size.")
+            N_size = tuple(data_size)
+    else:
+        info_func(info_args, "Warning: N_size must be of type integer or tuple.")
+        N_size = tuple(data_size)
+    (N_rank, N_accum, N_size_prod) = get_N(N_size)
+    res_calc_optimal_grouping = None
+    ## Standardization
+    if standardization:
+        for i in range((data_points_nparray.shape)[1]):
+            if np.var(data_points_nparray[:,i]) > 0:
+                data_points_nparray[:,i] = (data_points_nparray[:,i] - np.mean(data_points_nparray[:,i]))/np.std(data_points_nparray[:,i])
+            else:
+                data_points_nparray[:,i] = data_points_nparray[:,i] - np.mean(data_points_nparray[:,i])
+    ## Setting Parameters
+    if (N_size_prod > tensor_size_max) or (min(N_size) > group_size_max): ## If True, use "approximate solution".
+        ## Initial value settings
+        if init_grouping_indexes_list is None:
+            new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=init_grouping_rand) ## True: Random grouping, False: Grouping in order
+        else:
+            new_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
+        if main_show_info:
+            info_func(info_args, "---------- new_grouping_indexes_list (initial value): " + str(new_grouping_indexes_list))
+        if main_drawing_graphs:
+            (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
+                                        viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Initial value")
+        for loop in range( loop_max_multiplier*N_rank ):
+            (group_1, group_2) = random.sample(list(range(N_rank)), 2)
+            sub_N_size = [N_size[group_1], N_size[group_2]]
+            group_1_sub_index = []
+            group_2_sub_index = []
+            if sub_N_size[0] > group_size_max:
+                group_1_sub_index = random.sample(list(range(sub_N_size[0])), group_size_max)
+                sub_N_size[0] = group_size_max
+            else:
+                group_1_sub_index = list(range(sub_N_size[0]))
+            if sub_N_size[1] > group_size_max:
+                group_2_sub_index = random.sample(list(range(sub_N_size[1])), group_size_max)
+                sub_N_size[1] = group_size_max
+            else:
+                group_2_sub_index = list(range(sub_N_size[1]))
+            sub_N_size = tuple(sub_N_size)
+            sub_data_index = list(np.array(new_grouping_indexes_list[group_1])[group_1_sub_index]) + list(np.array(new_grouping_indexes_list[group_2])[group_2_sub_index])
+            sub_data_points_nparray = data_points_nparray[sub_data_index]
+            (sub_N_rank, sub_N_accum, sub_N_size_prod) = get_N(sub_N_size)
+            res_calc_optimal_grouping = calc_optimal_grouping_with_mst(
+                sub_data_points_nparray, sub_N_size,
+                sub_N_rank, sub_N_accum, sub_N_size_prod,
+                mean_penalty_weight, deviation_penalty_weight, order,
+                numerical_precision,
+                ot_speed, ot_stopping_rule, ot_loop_max,
+                tensor_tolerance, global_loop_max, local_loop_max,
+                None, True, ## init_grouping_indexes_list, init_grouping_rand,
+                search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                sub_show_info, sub_drawing_graphs,
+                info_func,
+                info_args,
+                viz2d_x, viz2d_y)
+            sub_opt_grouping_indexes_list = res_calc_optimal_grouping[0]
+            group_1_sub_grouping_indexes_list = list(np.array(sub_data_index)[sub_opt_grouping_indexes_list[0]])
+            group_2_sub_grouping_indexes_list = list(np.array(sub_data_index)[sub_opt_grouping_indexes_list[1]])
+            for i, index in enumerate(group_1_sub_index):
+                new_grouping_indexes_list[group_1][index] = group_1_sub_grouping_indexes_list[i]
+            for i, index in enumerate(group_2_sub_index):
+                new_grouping_indexes_list[group_2][index] = group_2_sub_grouping_indexes_list[i]
+            if main_show_info:
+                info_func(info_args, "---------- loop (partial optimization): " + str(loop+1))
+                info_func(info_args, "---------- new_grouping_indexes_list (partial optimization): " + str(new_grouping_indexes_list))
+            if (main_drawing_graphs) and (loop == (2*N_rank-1)):
+                (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
+                                            viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Optimal value")
+        res_calc_optimal_grouping = (new_grouping_indexes_list, 
+                                     None, # opt_intergroup_P_tensor,
+                                     None, # opt_adjusted_cost_value,
+                                     None, # opt_intergroup_cost_value,
+                                     None, # opt_intragroup_cost_value,
+                                     None, # opt_mean_cost_value,
+                                     None, # opt_deviation_cost_value,
+                                     None, # iteration_number_list,
+                                     None, # elapsed_time_list,
+                                     None, # new_adjusted_cost_trends_list,
+                                     None, # opt_adjusted_cost_trends_list,
+                                     viz2d_x, viz2d_y)
+    else:
+        res_calc_optimal_grouping = calc_optimal_grouping_with_mst(data_points_nparray, N_size,
+                            N_rank, N_accum, N_size_prod,
+                            mean_penalty_weight, deviation_penalty_weight, order,
+                            numerical_precision,
+                            ot_speed, ot_stopping_rule, ot_loop_max,
+                            tensor_tolerance, global_loop_max, local_loop_max,
+                            init_grouping_indexes_list, init_grouping_rand,
+                            search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                            main_show_info, main_drawing_graphs,
+                            info_func,
+                            info_args,
+                            viz2d_x, viz2d_y)
+    ## res_calc_optimal_grouping:
+    ## (opt_grouping_indexes_list, opt_intergroup_P_tensor,
+    ##  opt_adjusted_cost_value,
+    ##  opt_intergroup_cost_value, opt_intragroup_cost_value,
+    ##  opt_mean_cost_value, opt_deviation_cost_value,
+    ##  iteration_number_list, elapsed_time_list,
+    ##  new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+    ##  viz2d_x, viz2d_y)
+    return res_calc_optimal_grouping
+
+def gen_optimal_grouping_from_csv_file_with_mst(input_filepath= "./members.csv", input_index_col = 0, output_filepath = "./grouping.csv",
+                           N_size = None,
+                           standardization = True,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1, order = 1.0,
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           main_show_info = True, main_drawing_graphs = True,
+                           sub_show_info = False, sub_drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
+                           viz2d_x = None, viz2d_y = None):
+    ## input_filepath = "./members.csv" ## File path of the input file, in csv format.
+    ## input_index_col = 0 ## Column number with column name or column number in the csv file
+    ## output_filepath = "./grouping.csv" ##  File path of the output file, in csv format.
+    ############################
+    ## Loading data: loading csv files
+    df = pd.read_csv(filepath_or_buffer=input_filepath, index_col=input_index_col)
+    output_data = copy.deepcopy(df)
+    data_size = len(df)
+    ############################
+    ## Dummy variable processing: dummy variable for columns where dtype is object
+    df = pd.get_dummies(df, drop_first=True, dtype="float") # float64, uint8, bool
+    ############################
+    ##  Handling missing values: interpolate by median
+    for col in df.columns:
+        df[col] = df[col].fillna(df[col].median())
+    ############################
+    ## data_points_nparray: NumPy array consisting of data points
+    data_points_nparray_org = np.array(df.values)
+    data_points_nparray = copy.deepcopy(data_points_nparray_org) ## data_points_nparray: NumPy array consisting of data points
+    data_points_nparray = data_points_nparray.astype(float)
+    ###########################################
+    ## Data Standardization
+    if standardization:
+        for i in range((data_points_nparray.shape)[1]):
+            if np.var(data_points_nparray[:,i]) > 0:
+                data_points_nparray[:,i] = (data_points_nparray[:,i] - np.mean(data_points_nparray[:,i]))/np.std(data_points_nparray[:,i])
+            else:
+                data_points_nparray[:,i] = data_points_nparray[:,i] - np.mean(data_points_nparray[:,i])
+    ###########################################
+    ## Division and Search
+    (opt_grouping_indexes_list, opt_intergroup_P_tensor,
+     opt_adjusted_cost_value,
+     opt_intergroup_cost_value, opt_intragroup_cost_value,
+     opt_mean_cost_value, opt_deviation_cost_value,
+     iteration_number_list, elapsed_time_list,
+     new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+     viz2d_x, viz2d_y
+    ) = gen_optimal_grouping_with_mst(data_points_nparray, N_size, standardization,
+                            mean_penalty_weight, deviation_penalty_weight, order,
+                            numerical_precision,
+                            ot_speed, ot_stopping_rule, ot_loop_max,
+                            tensor_tolerance, global_loop_max, local_loop_max,
+                            init_grouping_indexes_list, init_grouping_rand,
+                            search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                            main_show_info, main_drawing_graphs,
+                            sub_show_info, sub_drawing_graphs,
+                            info_func, info_args,
+                            tensor_size_max, group_size_max, loop_max_multiplier,
+                            viz2d_x, viz2d_y)
+    ###########################################
+    ## Output grouping results to csv file
+    group_labels_list = np.zeros(data_size)
+    group = 0
+    for members_list in opt_grouping_indexes_list:
+        for member in members_list:
+            group_labels_list[member] = int(group)
+        group = group + 1
+    output_data.insert(loc=0, column="Group", value=group_labels_list.astype(int), allow_duplicates=True)
+    if (viz2d_x is not None) and (viz2d_y is not None):
+        output_data.insert(loc=1, column="viz2d_x", value=viz2d_x.astype(float), allow_duplicates=True)
+        output_data.insert(loc=2, column="viz2d_y", value=viz2d_y.astype(float), allow_duplicates=True)
+    output_data.to_csv(output_filepath)
+    ###########################################
+    ## Return
+    return (opt_grouping_indexes_list,
+            opt_intergroup_P_tensor,
+            opt_adjusted_cost_value,
+            opt_intergroup_cost_value, opt_intragroup_cost_value,
+            opt_mean_cost_value, opt_deviation_cost_value,
+            iteration_number_list, elapsed_time_list,
+            new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
+            output_data, viz2d_x, viz2d_y
+    )
+
+## Functions for calculating optrimal grouping
+def calc_optimal_grouping(data_points_nparray, N_size,
+                           N_rank = None, N_accum = None, N_size_prod = None,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.8,
+                           cost_type = "mst", order = None,
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 10, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           show_info = False, drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           viz2d_x = None, viz2d_y = None):
+    res_calc_optimal_grouping = None
+    if (cost_type == "mst"):
+        if(order == None):
+            order = 1.0
+        res_calc_optimal_grouping = calc_optimal_grouping_with_mst(data_points_nparray, N_size,
+                           N_rank, N_accum, N_size_prod,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           show_info, drawing_graphs,
+                           info_func,
+                           info_args,
+                           viz2d_x, viz2d_y)
+    elif(cost_type == "bc"):
+        if(order == None):
+            order = 2.0
+        res_calc_optimal_grouping = calc_optimal_grouping_with_bc(data_points_nparray, N_size,
+                           N_rank, N_accum, N_size_prod,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           show_info, drawing_graphs,
+                           info_func,
+                           info_args,
+                           viz2d_x, viz2d_y)
+    else:
+        cost_type = "mst"
+        order = 1.0
+        res_calc_optimal_grouping = calc_optimal_grouping_with_mst(data_points_nparray, N_size,
+                           N_rank, N_accum, N_size_prod,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           show_info, drawing_graphs,
+                           info_func,
+                           info_args,
+                           viz2d_x, viz2d_y)
+    return res_calc_optimal_grouping
+
+def gen_optimal_grouping(data_points_nparray, N_size = None, standardization = True,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1,
+                           cost_type = "mst", order = None,
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           main_show_info = True, main_drawing_graphs = True,
+                           sub_show_info = False, sub_drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
+                           viz2d_x = None, viz2d_y = None):
+    ## ## data_points_nparray: NumPy array consisting of data points
+    ## N_size: Tuple consisting of the number of elements in each group. If the variable is an integer, the tuple is automatically generated close to equally divided.
+    ## standardization = True ## Standardization
+    ## mean_penalty_weight = 0.1 ## Weight of mean_cost_value
+    ## deviation_penalty_weight = 0.8 ## Weight of deviation_cost_value
+    ## cost_type = "mst" ## "mst": minimum spanning tree, "bc": barycenter
+    ## order = None ## Norm order: order=1.0 is the Manhattan distance and order=2 is the Euclidean distance. (If order==None, then order = 1.0 when cost_type=="mst" and order = 2.0 when cost_type=="bc".)
+    ## numerical_precision = 2e-8 ## Values whose absolute value is less than or equal to numerical_precision are treated as 0.
+    ## ot_speed = 0.02 ## Bigger means faster, smaller means stricter
+    ## ot_stopping_rule = 0.02 ## Criteria to stop updating "u". If the relative error of "u" is smaller than the stop criterion, it is terminated.
+    ## ot_loop_max = 200 ## Maximum number of iterations in calc_multi_ot
+    ## tensor_tolerance = 2e-8 ## Tolerance of values when obtaining the tensor index from the value
+    ## global_loop_max = 100 ## Maximum number of iterations in calc_optimal_grouping
+    ## local_loop_max = 100 ## Upper bound on the number of enumerated patterns of local exchange
+    ## init_grouping_indexes_list = None ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
+    ## init_grouping_rand = True ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
+    ## search_method = "ex" ## "ex": exchange algorithm, "rand": random search, "hybrid": Hybrid of exchange algorithm and random search.
+    ## search_stopping_rule_err = 0.02 ## Criteria to stop searching by exchange algprithm.
+    ## search_stopping_rule_rep = 20 ## It stops when the relative difference in the optimal cost is search_stopping_rule_err or less for search_stopping_rule_rep consecutive periods.
+    ## main_show_info = True ## Flag whether information is displayed or not
+    ## main_drawing_graphs = True ## Flag whether or not to draw graphs
+    ## sub_show_info = False ## Flag whether information is displayed or not
+    ## sub_drawing_graphs = False ## Flag whether or not to draw graphs
+    ## info_func = (lambda info_args, txt: print(str(txt))) ## Function for displaying information
+    ## info_args = None ## Arguments for info_func
+    ## tensor_size_max = 4000 ## Maximum number of elements in the cost tensor. If N_size_prod > tensor_size_max, use an "approximate solution". 
+    ## group_size_max = 20 ## Maximum number of elements to be extracted if the group has a large number of elements. If min(N_size) > group_size_max, use an "approximate solution". 
+    ## loop_max_multiplier = 4 ## Multiplier of the number of loops in the "approximate solution". 
+    ## viz2d_x = None ## x-axis values for data visualization (If None, it is automatically calculated.)
+    ## viz2d_y = None ## y-axis values for data visualization (If None, it is automatically calculated.)
+    ## N_size
+    res_gen_optimal_grouping = None
+    if (cost_type == "mst"):
+        if(order == None):
+            order = 1.0
+        res_gen_optimal_grouping = gen_optimal_grouping_with_mst(data_points_nparray, N_size, standardization,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           main_show_info, main_drawing_graphs,
+                           sub_show_info, sub_drawing_graphs,
+                           info_func,
+                           info_args,
+                           tensor_size_max, group_size_max, loop_max_multiplier,
+                           viz2d_x, viz2d_y)
+    elif(cost_type == "bc"):
+        if(order == None):
+            order = 2.0
+        res_gen_optimal_grouping = gen_optimal_grouping_with_bc(data_points_nparray, N_size, standardization,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           main_show_info, main_drawing_graphs,
+                           sub_show_info, sub_drawing_graphs,
+                           info_func,
+                           info_args,
+                           tensor_size_max, group_size_max, loop_max_multiplier,
+                           viz2d_x, viz2d_y)
+    else:
+        cost_type = "mst"
+        order = 1.0
+        res_gen_optimal_grouping = gen_optimal_grouping_with_mst(data_points_nparray, N_size, standardization,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           main_show_info, main_drawing_graphs,
+                           sub_show_info, sub_drawing_graphs,
+                           info_func,
+                           info_args,
+                           tensor_size_max, group_size_max, loop_max_multiplier,
+                           viz2d_x, viz2d_y)
+    return res_gen_optimal_grouping
+
+def gen_optimal_grouping_from_csv_file(input_filepath= "./members.csv", input_index_col = 0, output_filepath = "./grouping.csv",
+                           N_size = None,
+                           standardization = True,
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1,
+                           cost_type = "mst", order = None,
+                           numerical_precision = 2e-8,
+                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
+                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
+                           init_grouping_indexes_list = None, init_grouping_rand = True,
+                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
+                           main_show_info = True, main_drawing_graphs = True,
+                           sub_show_info = False, sub_drawing_graphs = False,
+                           info_func = (lambda info_args, txt: print(str(txt))),
+                           info_args = None,
+                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
+                           viz2d_x = None, viz2d_y = None):
+    ## input_filepath = "./members.csv" ## File path of the input file, in csv format.
+    ## input_index_col = 0 ## Column number with column name or column number in the csv file
+    ## output_filepath = "./grouping.csv" ##  File path of the output file, in csv format.
+    res_gen_optimal_grouping = None
+    if (cost_type == "mst"):
+        if(order == None):
+            order = 1.0
+        res_gen_optimal_grouping = gen_optimal_grouping_from_csv_file_with_mst(input_filepath, input_index_col, output_filepath,
+                           N_size, standardization,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           main_show_info, main_drawing_graphs,
+                           sub_show_info, sub_drawing_graphs,
+                           info_func,
+                           info_args,
+                           tensor_size_max, group_size_max, loop_max_multiplier,
+                           viz2d_x, viz2d_y)
+    elif(cost_type == "bc"):
+        if(order == None):
+            order = 2.0
+        res_gen_optimal_grouping = gen_optimal_grouping_from_csv_file_with_bc(input_filepath, input_index_col, output_filepath,
+                           N_size, standardization,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           main_show_info, main_drawing_graphs,
+                           sub_show_info, sub_drawing_graphs,
+                           info_func,
+                           info_args,
+                           tensor_size_max, group_size_max, loop_max_multiplier,
+                           viz2d_x, viz2d_y)
+    else:
+        cost_type = "mst"
+        order = 1.0
+        res_gen_optimal_grouping = gen_optimal_grouping_from_csv_file_with_mst(input_filepath, input_index_col, output_filepath,
+                           N_size, standardization,
+                           mean_penalty_weight, deviation_penalty_weight, order,
+                           numerical_precision,
+                           ot_speed, ot_stopping_rule, ot_loop_max,
+                           tensor_tolerance, global_loop_max, local_loop_max,
+                           init_grouping_indexes_list, init_grouping_rand,
+                           search_method, search_stopping_rule_err, search_stopping_rule_rep,
+                           main_show_info, main_drawing_graphs,
+                           sub_show_info, sub_drawing_graphs,
+                           info_func,
+                           info_args,
+                           tensor_size_max, group_size_max, loop_max_multiplier,
+                           viz2d_x, viz2d_y)
+    return res_gen_optimal_grouping
+
+## Functions for displaying information and drawing graphs
+
+def cprint(txt, color="BRIGHT_CYAN", end="\n"):
+    if os.name == 'nt':
+        COLORS = {
+        "BLACK": "\033[30m",
+        "RED": "\033[31m",
+        "GREEN": "\033[32m",
+        "YELLOW": "\033[33m",
+        "BLUE": "\033[34m",
+        "MAGENTA": "\033[35m",
+        "CYAN": "\033[36m",
+        "WHITE": "\033[37m",
+        "DEFAULT_COLOR": "\033[39m",
+        "GRAY": "\033[90m",
+        "BRIGHT_RED": "\033[91m",
+        "BRIGHT_GREEN": "\033[92m",
+        "BRIGHT_YELLOW": "\033[93m",
+        "BRIGHT_BLUE": "\033[94m",
+        "BRIGHT_MAGENTA": "\033[95m",
+        "BRIGHT_CYAN": "\033[96m",
+        "BRIGHT_WHITE": "\033[97m",
+        }
+        END = "\033[0m"
+        print(COLORS[color] + txt + END, end=end)
+    else:
+        print(txt)
+
 def get_rank_vec(v):
     n = len(v)
     rank = [0]*n
@@ -492,533 +1972,6 @@ def get_marginal_value(target_tensor, fixed_group_list, fixed_element_list,
         marginal_value = marginal_value + temp_value
     return marginal_value
 
-## Functions to calculate optrimal grouping
-def calc_optimal_grouping(data_points_nparray, N_size,
-                           N_rank = None, N_accum = None, N_size_prod = None,
-                           mean_penalty_weight = 0.2, variance_penalty_weight = 0.8,
-                           numerical_precision = 2e-8,
-                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
-                           tensor_tolerance = 2e-8, global_loop_max = 10, local_loop_max = 100,
-                           init_grouping_indexes_list = None, init_grouping_rand = True,
-                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
-                           show_info = False, drawing_graphs = False,
-                           info_func = (lambda info_args, txt: print(str(txt))),
-                           info_args = None,
-                           viz2d_x = None, viz2d_y = None):
-    ## N_rank, N_accum, N_size_prod, marginal_mass_vectors
-    if (N_rank is None) or (N_accum is None) or (N_size_prod is None):
-        (N_rank, N_accum, N_size_prod) = get_N(N_size)
-    marginal_mass_vectors = calc_marginal_mass_vectors(N_rank, N_size)
-    ## Initial value settings
-    if init_grouping_indexes_list is None:
-        init_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=init_grouping_rand) ## True: Random grouping, False: Grouping in order
-    ## Calculation of optimal transportation costs under initial conditions
-    (init_adjusted_cost_value, init_mean_cost_value, init_variance_cost_value,
-    init_intragroup_cost_value, init_intragroup_cost_nparray_list, init_intragroup_barycenter_nparray_list,
-    init_intergroup_cost_value, init_intergroup_P_tensor, init_intergroup_weighted_cost_tensor,
-    init_intergroup_u_vec_list, init_intergroup_f_vec_list,
-    init_intergroup_cost_tensor) = calc_adjusted_cost_value(
-        init_grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
-        N_size, N_rank, N_accum, N_size_prod,
-        mean_penalty_weight, variance_penalty_weight, 
-        numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
-    )
-    ## Preparation for recording
-    iteration_number_list = [0]
-    elapsed_time_list = [0]
-    new_adjusted_cost_trends_list = [init_adjusted_cost_value]
-    opt_adjusted_cost_trends_list = [init_adjusted_cost_value]
-    start_time = time.time()
-    ## info
-    if show_info:
-        info_func(info_args, "---------- init")
-        info_func(info_args, "init_grouping_indexes_list: " + str(init_grouping_indexes_list))
-        info_func(info_args, "init_adjusted_cost_value: " + str(init_adjusted_cost_value))
-        info_func(info_args, "  (init_intergroup_cost_value, init_intragroup_cost_value: " + str(init_intergroup_cost_value) + ", " + str(init_intragroup_cost_value) + ")")
-        info_func(info_args, "  (mean_penalty_weight*init_mean_cost_value, variance_penalty_weight*init_variance_cost_value : " 
-              + str(mean_penalty_weight*init_mean_cost_value) + ", " + str(variance_penalty_weight*init_variance_cost_value) + ")")
-    if drawing_graphs:
-        (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
-                                                                init_grouping_indexes_list, data_points_nparray, 
-                                                                N_size, N_rank, N_accum, N_size_prod,
-                                                                viz2d_x, viz2d_y, init_intergroup_P_tensor)
-        # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, init_grouping_indexes_list, data_points_nparray,
-        #                             viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Initial Value")
-        show_P_tensor(init_intergroup_P_tensor, N_size, N_rank, N_accum, f_size=(4,3), f_title="Initial Value")
-    ## opt
-    opt_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
-    opt_adjusted_cost_value = init_adjusted_cost_value
-    opt_mean_cost_value = init_mean_cost_value
-    opt_variance_cost_value = init_variance_cost_value
-    opt_intragroup_cost_value = init_intragroup_cost_value
-    opt_intragroup_cost_nparray_list = copy.deepcopy(init_intragroup_cost_nparray_list)
-    opt_intragroup_barycenter_nparray_list = copy.deepcopy(init_intragroup_barycenter_nparray_list)
-    opt_intergroup_cost_value = init_intergroup_cost_value
-    opt_intergroup_P_tensor = copy.deepcopy(init_intergroup_P_tensor)
-    opt_intergroup_weighted_cost_tensor = copy.deepcopy(init_intergroup_weighted_cost_tensor)
-    opt_intergroup_cost_tensor = copy.deepcopy(init_intergroup_cost_tensor)
-    ## new
-    new_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
-    new_adjusted_cost_value = init_adjusted_cost_value
-    new_mean_cost_value = init_mean_cost_value
-    new_variance_cost_value = init_variance_cost_value
-    new_intragroup_cost_value = init_intragroup_cost_value
-    new_intragroup_cost_nparray_list = copy.deepcopy(init_intragroup_cost_nparray_list)
-    new_intragroup_barycenter_nparray_list = copy.deepcopy(init_intragroup_barycenter_nparray_list)
-    new_intergroup_cost_value = init_intergroup_cost_value
-    new_intergroup_P_tensor = copy.deepcopy(init_intergroup_P_tensor)
-    new_intergroup_weighted_cost_tensor = copy.deepcopy(init_intergroup_weighted_cost_tensor)
-    new_intergroup_cost_tensor = copy.deepcopy(init_intergroup_cost_tensor)
-    ## Search for optimal value
-    new_grouping_flag = True
-    search_stopping_rule_counter = 0
-    for loop in range(global_loop_max):
-        if show_info:
-            info_func(info_args, "---------- loop: " + str(loop+1))
-        search_stopping_rule_counter = search_stopping_rule_counter + 1
-        if search_method=="rand": ## search_method=="rand"
-            new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=True) ## True: Random grouping, False: Grouping in order
-        else: ## search_method=="ex" or search_method=="hybrid"
-            if (search_stopping_rule_counter >= search_stopping_rule_rep):
-                opt_adjusted_cost_diff_list = opt_adjusted_cost_trends_list[(len(opt_adjusted_cost_trends_list)-search_stopping_rule_rep):]
-                old_adjusted_cost_value = opt_adjusted_cost_diff_list[0]
-                opt_adjusted_cost_diff_list = abs(np.array(opt_adjusted_cost_diff_list) - old_adjusted_cost_value)
-                opt_adjusted_cost_diff_list = opt_adjusted_cost_diff_list/(abs(old_adjusted_cost_value)+numerical_precision)
-                opt_adjusted_cost_diff_max = max(opt_adjusted_cost_diff_list)
-                if opt_adjusted_cost_diff_max <= search_stopping_rule_err:
-                    if search_method=="hybrid": ## search_method=="hybrid"
-                        search_stopping_rule_counter = 0
-                        new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=True) ## True: Random grouping, False: Grouping in order
-                        if show_info:
-                            info_func(info_args, "Grouping has been shuffled.")
-                    else: ## search_method=="ex"
-                        if show_info:
-                            info_func(info_args, "The stopping criterion determined that convergence to the optimum value was achieved.")
-                        break
-            ## Local grouping: Select two clusters and perform an exchange between the two clusters
-            probability_tensor = copy.deepcopy(new_intergroup_weighted_cost_tensor)
-            cluster_1_value = (random.choices(probability_tensor, k=1, weights=probability_tensor))[0]
-            cluster_1_flattened_index_list = get_tensor_flattened_index_list_from_value(probability_tensor, cluster_1_value, tensor_tolerance)
-            cluster_1_flattened_index = random.choice(cluster_1_flattened_index_list)
-            cluster_1_multi_index = get_tensor_multi_index_from_flattened_index(cluster_1_flattened_index, N_rank, N_accum)
-            probability_tensor[cluster_1_flattened_index] = 0
-            cluster_2_value = (random.choices(probability_tensor, k=1, weights=probability_tensor))[0]
-            cluster_2_flattened_index_list = get_tensor_flattened_index_list_from_value(probability_tensor, cluster_2_value, tensor_tolerance)
-            cluster_2_flattened_index = random.choice(cluster_2_flattened_index_list)
-            cluster_2_multi_index = get_tensor_multi_index_from_flattened_index(cluster_2_flattened_index, N_rank, N_accum)
-            ## Preparation for local grouping
-            local_N_size = []
-            local_data_indexes = []
-            opt_local_grouping_indexes_list = []
-            ## local_N_size, local_data_indexes, opt_local_grouping_indexes_list, local_N_rank, local_N_accum, local_N_size_prod, local_marginal_mass_vectors
-            for local_group in range(N_rank):
-                if cluster_1_multi_index[local_group] == cluster_2_multi_index[local_group]:
-                    local_N_size.append(1)
-                    temp_index = new_grouping_indexes_list[local_group][cluster_1_multi_index[local_group]]
-                    local_data_indexes.append(temp_index)
-                    opt_local_grouping_indexes_list.append([temp_index])
-                else:
-                    local_N_size.append(2)
-                    temp_index_1 = new_grouping_indexes_list[local_group][cluster_1_multi_index[local_group]]
-                    temp_index_2 = new_grouping_indexes_list[local_group][cluster_2_multi_index[local_group]]
-                    local_data_indexes.append(temp_index_1)
-                    local_data_indexes.append(temp_index_2)
-                    opt_local_grouping_indexes_list.append([temp_index_1, temp_index_2])
-            local_N_size = tuple(local_N_size)
-            (local_N_rank, local_N_accum, local_N_size_prod) = get_N(local_N_size)
-            local_marginal_mass_vectors = calc_marginal_mass_vectors(local_N_rank, local_N_size)
-            ## Calculation of current local optimal transportation costs
-            (opt_local_adjusted_cost_value, opt_local_mean_cost_value, opt_local_variance_cost_value,
-            opt_local_intragroup_cost_value, opt_local_intragroup_cost_nparray_list, opt_local_intragroup_barycenter_nparray_list,
-            opt_local_intergroup_cost_value, opt_local_intergroup_P_tensor, opt_local_intergroup_weighted_cost_tensor,
-            opt_local_intergroup_u_vec_list, opt_local_intergroup_f_vec_list,
-            opt_local_intergroup_cost_tensor) = calc_adjusted_cost_value(
-                opt_local_grouping_indexes_list, data_points_nparray, local_marginal_mass_vectors,
-                local_N_size, local_N_rank, local_N_accum, local_N_size_prod,
-                mean_penalty_weight, variance_penalty_weight,
-                numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
-            )
-            old_local_adjusted_cost_value = opt_local_adjusted_cost_value
-            ## Enumeration of grouping patterns
-            ## (If N_rank is 2 or 3, all enumeration is used, and more than that, random selection is used.)
-            local_grouping_indexes_list_combinations = []
-            if local_N_rank == 2: ## It might be a good idea to have all the patterns ready in advance. (2^2-1=3)
-                numbers_list = list(range(sum(local_N_size)))
-                for sub_numbers_list_1 in itertools.combinations(numbers_list, local_N_size[0]):
-                    sub_numbers_list_2 = tuple(np.delete(numbers_list, sub_numbers_list_1, 0))
-                    temp_local_grouping_indexes_list = list((np.array(local_data_indexes))[list(sub_numbers_list_1+sub_numbers_list_2)])
-                    temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
-                    if temp_local_grouping_indexes_list != opt_local_grouping_indexes_list:
-                        local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
-            elif local_N_rank == 3: ## It might be a good idea to have all the patterns ready in advance. (2^3-1=7)
-                numbers_list = list(range(sum(local_N_size)))
-                for sub_numbers_list_1 in itertools.combinations(numbers_list, local_N_size[0]):
-                    temp_numbers_list = np.delete(numbers_list, sub_numbers_list_1, 0)
-                    for sub_numbers_list_2 in itertools.combinations(temp_numbers_list, local_N_size[1]):      
-                        sub_numbers_list_3 = tuple(np.delete(numbers_list, sub_numbers_list_1+sub_numbers_list_2, 0))
-                        temp_local_grouping_indexes_list = list((np.array(local_data_indexes))[list(sub_numbers_list_1+sub_numbers_list_2+sub_numbers_list_3)])
-                        temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
-                        if temp_local_grouping_indexes_list!= opt_local_grouping_indexes_list:
-                                local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
-            else:
-                for i in range(local_loop_max):
-                    temp_local_grouping_indexes_list = random.sample(local_data_indexes, len(local_data_indexes))
-                    temp_local_grouping_indexes_list = gen_grouping_indexes_list(local_N_size, rand=False, data_order_list=temp_local_grouping_indexes_list)
-                    if (temp_local_grouping_indexes_list!= opt_local_grouping_indexes_list) and (temp_local_grouping_indexes_list not in local_grouping_indexes_list_combinations):
-                                local_grouping_indexes_list_combinations.append(temp_local_grouping_indexes_list)
-            ## Calculate the cost of local optimal transportation for each pattern of local grouping
-            opt_local_adjusted_cost_value = float('inf')
-            opt_local_grouping_indexes_list_list = []
-            for new_local_grouping_indexes_list in local_grouping_indexes_list_combinations:
-                (new_local_adjusted_cost_value, new_local_mean_cost_value, new_local_variance_cost_value,
-                new_local_intragroup_cost_value, new_local_intragroup_cost_nparray_list, new_local_intragroup_barycenter_nparray_list,
-                new_local_intergroup_cost_value, new_local_intergroup_P_tensor, new_local_intergroup_weighted_cost_tenso,
-                new_local_intergroup_u_vec_list, new_local_intergroup_f_vec_list,
-                new_local_intergroup_cost_tensor) = calc_adjusted_cost_value(
-                        new_local_grouping_indexes_list, data_points_nparray, local_marginal_mass_vectors,
-                        local_N_size, local_N_rank, local_N_accum, local_N_size_prod,
-                        mean_penalty_weight, variance_penalty_weight,
-                        numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
-                )
-                if new_local_adjusted_cost_value < opt_local_adjusted_cost_value:
-                    opt_local_adjusted_cost_value = new_local_adjusted_cost_value
-                    opt_local_grouping_indexes_list_list = [new_local_grouping_indexes_list]
-                elif new_local_adjusted_cost_value == opt_local_adjusted_cost_value:
-                    opt_local_grouping_indexes_list_list.append(new_local_grouping_indexes_list)
-            opt_local_grouping_indexes_list = random.choice(opt_local_grouping_indexes_list_list)
-            random_number = random.random()
-            new_grouping_flag = (opt_local_adjusted_cost_value==0) or (random_number <= (old_local_adjusted_cost_value/opt_local_adjusted_cost_value))
-            if new_grouping_flag:
-                for group in range(local_N_rank):
-                    if local_N_size[group] == 1:
-                        new_grouping_indexes_list[group][cluster_1_multi_index[group]] = opt_local_grouping_indexes_list[group][0]
-                    else:
-                        new_grouping_indexes_list[group][cluster_1_multi_index[group]] = opt_local_grouping_indexes_list[group][0]
-                        new_grouping_indexes_list[group][cluster_2_multi_index[group]] = opt_local_grouping_indexes_list[group][1]
-        if new_grouping_flag:
-            ## Calculation of the cost of optimal transport
-            (new_adjusted_cost_value, new_mean_cost_value, new_variance_cost_value,
-            new_intragroup_cost_value, new_intragroup_cost_nparray_list, new_intragroup_barycenter_nparray_list, 
-            new_intergroup_cost_value, new_intergroup_P_tensor, 
-            new_intergroup_weighted_cost_tensor, new_intergroup_u_vec_list, new_intergroup_f_vec_list, 
-            new_intergroup_cost_tensor) = calc_adjusted_cost_value(
-                    new_grouping_indexes_list, data_points_nparray, marginal_mass_vectors, 
-                    N_size, N_rank, N_accum, N_size_prod,
-                    mean_penalty_weight, variance_penalty_weight,
-                    numerical_precision, ot_speed, ot_stopping_rule, ot_loop_max
-            )
-        if show_info:
-            info_func(info_args, "new_grouping_indexes_list: " + str(new_grouping_indexes_list))
-            info_func(info_args, "new_adjusted_cost_value: " + str(new_adjusted_cost_value))
-        # if drawing_graphs:
-        #     (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
-        #                                                 new_grouping_indexes_list, data_points_nparray, 
-        #                                                 N_size, N_rank, N_accum, N_size_prod,
-        #                                                 viz2d_x, viz2d_y, new_intergroup_P_tensor)
-        #     # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
-        #     #                             viz2d_x, viz2d_y, line_width = 1, f_size=(4,3,1), f_title="Mid-calculation")
-        if new_adjusted_cost_value <= opt_adjusted_cost_value:
-            opt_grouping_indexes_list = copy.deepcopy(new_grouping_indexes_list)
-            opt_adjusted_cost_value = new_adjusted_cost_value
-            opt_mean_cost_value = new_mean_cost_value
-            opt_variance_cost_value = new_variance_cost_value
-            opt_intragroup_cost_value = new_intragroup_cost_value
-            opt_intragroup_cost_nparray_list = copy.deepcopy(new_intragroup_cost_nparray_list)
-            opt_intragroup_barycenter_nparray_list = copy.deepcopy(new_intragroup_barycenter_nparray_list)
-            opt_intergroup_cost_value = new_intergroup_cost_value
-            opt_intergroup_P_tensor = copy.deepcopy(new_intergroup_P_tensor)
-            opt_intergroup_weighted_cost_tensor = copy.deepcopy(new_intergroup_weighted_cost_tensor)
-            opt_intergroup_cost_tensor = copy.deepcopy(new_intergroup_cost_tensor)
-        ## Recording
-        iteration_number_list.append(loop+1)
-        elapsed_time = float(time.time() - start_time)
-        elapsed_time_list.append(elapsed_time)
-        new_adjusted_cost_trends_list.append(new_adjusted_cost_value)
-        opt_adjusted_cost_trends_list.append(opt_adjusted_cost_value)
-    ## info
-    if show_info:
-        info_func(info_args, "---------- opt")
-        info_func(info_args, "opt_grouping_indexes_list: " + str(init_grouping_indexes_list))
-        info_func(info_args, "opt_adjusted_cost_value: " + str(opt_adjusted_cost_value))
-        info_func(info_args, "  (opt_intergroup_cost_value, opt_intragroup_cost_value: " + str(opt_intergroup_cost_value) + ", " + str(opt_intragroup_cost_value) + ")")
-        info_func(info_args, "  (mean_penalty_weight*opt_mean_cost_value, variance_penalty_weight*opt_variance_cost_value : "
-              + str(mean_penalty_weight*opt_mean_cost_value) + ", " + str(variance_penalty_weight*opt_variance_cost_value) + ")")
-        ## Computation time
-        elapsed_hour = elapsed_time // 3600
-        elapsed_minute = (elapsed_time % 3600) // 60
-        elapsed_second = (elapsed_time % 3600 % 60)
-        info_func(info_args, "computation time:" + str(elapsed_hour).zfill(2) + ":" + str(elapsed_minute).zfill(2) + ":" + str(elapsed_second).zfill(2))
-    if drawing_graphs:
-        (fig, ax, viz2d_x, viz2d_y) = show_2d_data_with_patches(is_umap_loaded, 
-                                            opt_grouping_indexes_list, data_points_nparray, 
-                                            N_size, N_rank, N_accum, N_size_prod,
-                                            viz2d_x, viz2d_y, opt_intergroup_P_tensor)
-        # (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, opt_grouping_indexes_list, data_points_nparray,
-        #                             viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Optimal value")
-        show_P_tensor(opt_intergroup_P_tensor, N_size, N_rank, N_accum, f_size=(4,3), f_title="Optimal value")
-     ## return
-    return (opt_grouping_indexes_list, opt_intergroup_P_tensor,
-            opt_adjusted_cost_value,
-            opt_intergroup_cost_value, opt_intragroup_cost_value,
-            opt_mean_cost_value, opt_variance_cost_value,
-            iteration_number_list, elapsed_time_list,
-            new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
-            viz2d_x, viz2d_y
-            )
-
-## ## data_points_nparray: NumPy array consisting of data points
-## N_size: Tuple consisting of the number of elements in each group. If the variable is an integer, the tuple is automatically generated close to equally divided.
-## standardization = True ## Standardization
-## mean_penalty_weight = 0.2 ## Weight of mean_cost_value
-## variance_penalty_weight = 0.8 ## Weight of variance_cost_value
-## numerical_precision = 2e-8 ## Values whose absolute value is less than or equal to numerical_precision are treated as 0.
-## ot_speed = 0.02 ## Bigger means faster, smaller means stricter
-## ot_stopping_rule = 0.02 ## Criteria to stop updating "u". If the relative error of "u" is smaller than the stop criterion, it is terminated.
-## ot_loop_max = 200 ## Maximum number of iterations in calc_multi_ot
-## tensor_tolerance = 2e-8 ## Tolerance of values when obtaining the tensor index from the value
-## global_loop_max = 100 ## Maximum number of iterations in calc_optimal_grouping
-## local_loop_max = 100 ## Upper bound on the number of enumerated patterns of local exchange
-## init_grouping_indexes_list = None ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
-## init_grouping_rand = True ## If initial value is None, randomly (if init_grouping_rand == True) generates an initial value
-## search_method = "ex" ## "ex": exchange algorithm, "rand": random search, "hybrid": Hybrid of exchange algorithm and random search.
-## search_stopping_rule_err = 0.02 ## Criteria to stop searching by exchange algprithm.
-## search_stopping_rule_rep = 20 ## It stops when the relative difference in the optimal cost is search_stopping_rule_err or less for search_stopping_rule_rep consecutive periods.
-## main_show_info = True ## Flag whether information is displayed or not
-## main_drawing_graphs = True ## Flag whether or not to draw graphs
-## sub_show_info = False ## Flag whether information is displayed or not
-## sub_drawing_graphs = False ## Flag whether or not to draw graphs
-## info_func = (lambda info_args, txt: print(str(txt))) ## Function for displaying information
-## info_args = None ## Arguments for info_func
-## tensor_size_max = 4000 ## Maximum number of elements in the cost tensor. If N_size_prod > tensor_size_max, use an "approximate solution". 
-## group_size_max = 20 ## Maximum number of elements to be extracted if the group has a large number of elements. If min(N_size) > group_size_max, use an "approximate solution". 
-## loop_max_multiplier = 4 ## Multiplier of the number of loops in the "approximate solution". 
-## viz2d_x = None ## x-axis values for data visualization (If None, it is automatically calculated.)
-## viz2d_y = None ## y-axis values for data visualization (If None, it is automatically calculated.)
-def gen_optimal_grouping(data_points_nparray, N_size = None, standardization = True,
-                           mean_penalty_weight = 0.2, variance_penalty_weight = 0.8, 
-                           numerical_precision = 2e-8,
-                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
-                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
-                           init_grouping_indexes_list = None, init_grouping_rand = True,
-                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
-                           main_show_info = True, main_drawing_graphs = True,
-                           sub_show_info = False, sub_drawing_graphs = False,
-                           info_func = (lambda info_args, txt: print(str(txt))),
-                           info_args = None,
-                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
-                           viz2d_x = None, viz2d_y = None):
-    ## N_size
-    data_size = len(data_points_nparray)
-    if N_size is None:
-        info_func(info_args, "Warning: N_size is None.")
-        N_size = tuple(data_size)
-    if (type(N_size) == int):
-        if data_size > N_size:
-            (quotient, remainder) = divmod(data_size, N_size)
-            N_size = np.full(N_size, quotient)
-            for i in range(remainder):
-                N_size[i] = N_size[i] + 1
-            N_size = tuple(N_size)
-        else:
-            N_size = tuple(data_size)
-    elif (type(N_size) == tuple) or (type(N_size) == list):
-        N_size = tuple(N_size)
-        if data_size != sum(N_size):
-            info_func(info_args, "Warning: The sum of N_size does not match sample size.")
-            N_size = tuple(data_size)
-    else:
-        info_func(info_args, "Warning: N_size must be of type integer or tuple.")
-        N_size = tuple(data_size)
-    (N_rank, N_accum, N_size_prod) = get_N(N_size)
-    res_calc_optimal_grouping = None
-    ## Standardization
-    if standardization:
-        for i in range((data_points_nparray.shape)[1]):
-            if np.var(data_points_nparray[:,i]) > 0:
-                data_points_nparray[:,i] = (data_points_nparray[:,i] - np.mean(data_points_nparray[:,i]))/np.std(data_points_nparray[:,i])
-            else:
-                data_points_nparray[:,i] = data_points_nparray[:,i] - np.mean(data_points_nparray[:,i])
-    ## Setting Parameters
-    if (N_size_prod > tensor_size_max) or (min(N_size) > group_size_max): ## If True, use "approximate solution".
-        ## Initial value settings
-        if init_grouping_indexes_list is None:
-            new_grouping_indexes_list = gen_grouping_indexes_list(N_size, rand=init_grouping_rand) ## True: Random grouping, False: Grouping in order
-        else:
-            new_grouping_indexes_list = copy.deepcopy(init_grouping_indexes_list)
-        if main_show_info:
-            info_func(info_args, "---------- new_grouping_indexes_list (initial value): " + str(new_grouping_indexes_list))
-        if main_drawing_graphs:
-            (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
-                                        viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Initial value")
-        for loop in range( loop_max_multiplier*N_rank ):
-            (group_1, group_2) = random.sample(list(range(N_rank)), 2)
-            sub_N_size = [N_size[group_1], N_size[group_2]]
-            group_1_sub_index = []
-            group_2_sub_index = []
-            if sub_N_size[0] > group_size_max:
-                group_1_sub_index = random.sample(list(range(sub_N_size[0])), group_size_max)
-                sub_N_size[0] = group_size_max
-            else:
-                group_1_sub_index = list(range(sub_N_size[0]))
-            if sub_N_size[1] > group_size_max:
-                group_2_sub_index = random.sample(list(range(sub_N_size[1])), group_size_max)
-                sub_N_size[1] = group_size_max
-            else:
-                group_2_sub_index = list(range(sub_N_size[1]))
-            sub_N_size = tuple(sub_N_size)
-            sub_data_index = list(np.array(new_grouping_indexes_list[group_1])[group_1_sub_index]) + list(np.array(new_grouping_indexes_list[group_2])[group_2_sub_index])
-            sub_data_points_nparray = data_points_nparray[sub_data_index]
-            (sub_N_rank, sub_N_accum, sub_N_size_prod) = get_N(sub_N_size)
-            res_calc_optimal_grouping = calc_optimal_grouping(
-                sub_data_points_nparray, sub_N_size,
-                sub_N_rank, sub_N_accum, sub_N_size_prod,
-                mean_penalty_weight, variance_penalty_weight,
-                numerical_precision,
-                ot_speed, ot_stopping_rule, ot_loop_max,
-                tensor_tolerance, global_loop_max, local_loop_max,
-                None, True, ## init_grouping_indexes_list, init_grouping_rand,
-                search_method, search_stopping_rule_err, search_stopping_rule_rep,
-                sub_show_info, sub_drawing_graphs,
-                info_func,
-                info_args,
-                viz2d_x, viz2d_y)
-            sub_opt_grouping_indexes_list = res_calc_optimal_grouping[0]
-            group_1_sub_grouping_indexes_list = list(np.array(sub_data_index)[sub_opt_grouping_indexes_list[0]])
-            group_2_sub_grouping_indexes_list = list(np.array(sub_data_index)[sub_opt_grouping_indexes_list[1]])
-            for i, index in enumerate(group_1_sub_index):
-                new_grouping_indexes_list[group_1][index] = group_1_sub_grouping_indexes_list[i]
-            for i, index in enumerate(group_2_sub_index):
-                new_grouping_indexes_list[group_2][index] = group_2_sub_grouping_indexes_list[i]
-            if main_show_info:
-                info_func(info_args, "---------- loop (partial optimization): " + str(loop+1))
-                info_func(info_args, "---------- new_grouping_indexes_list (partial optimization): " + str(new_grouping_indexes_list))
-            if (main_drawing_graphs) and (loop == (2*N_rank-1)):
-                (fig, ax, viz2d_x, viz2d_y) = show_2d_data(is_umap_loaded, new_grouping_indexes_list, data_points_nparray,
-                                            viz2d_x, viz2d_y, line_width = 1, f_size=(5,4,2), f_title="Optimal value")
-        res_calc_optimal_grouping = (new_grouping_indexes_list, 
-                                     None, # opt_intergroup_P_tensor,
-                                     None, # opt_adjusted_cost_value,
-                                     None, # opt_intergroup_cost_value,
-                                     None, # opt_intragroup_cost_value,
-                                     None, # opt_mean_cost_value,
-                                     None, # opt_variance_cost_value,
-                                     None, # iteration_number_list,
-                                     None, # elapsed_time_list,
-                                     None, # new_adjusted_cost_trends_list,
-                                     None, # opt_adjusted_cost_trends_list,
-                                     viz2d_x, viz2d_y)
-    else:
-        res_calc_optimal_grouping = calc_optimal_grouping(data_points_nparray, N_size,
-                            N_rank, N_accum, N_size_prod,
-                            mean_penalty_weight, variance_penalty_weight,
-                            numerical_precision,
-                            ot_speed, ot_stopping_rule, ot_loop_max,
-                            tensor_tolerance, global_loop_max, local_loop_max,
-                            init_grouping_indexes_list, init_grouping_rand,
-                            search_method, search_stopping_rule_err, search_stopping_rule_rep,
-                            main_show_info, main_drawing_graphs,
-                            info_func,
-                            info_args,
-                            viz2d_x, viz2d_y)
-    ## res_calc_optimal_grouping:
-    ## (opt_grouping_indexes_list, opt_intergroup_P_tensor,
-    ##  opt_adjusted_cost_value,
-    ##  opt_intergroup_cost_value, opt_intragroup_cost_value,
-    ##  opt_mean_cost_value, opt_variance_cost_value,
-    ##  iteration_number_list, elapsed_time_list,
-    ##  new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
-    ##  viz2d_x, viz2d_y)
-    return res_calc_optimal_grouping
-
-## input_filepath = "./members.csv" ## File path of the input file, in csv format.
-## input_index_col = 0 ## Column number with column name or column number in the csv file
-## output_filepath = "./grouping.csv" ##  File path of the output file, in csv format.
-def gen_grouping_from_csv_file(input_filepath= "./members.csv", input_index_col = 0, output_filepath = "./grouping.csv",
-                           N_size = None,
-                           standardization = True,
-                           mean_penalty_weight = 0.2, variance_penalty_weight = 0.8, 
-                           numerical_precision = 2e-8,
-                           ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
-                           tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
-                           init_grouping_indexes_list = None, init_grouping_rand = True,
-                           search_method = "ex", search_stopping_rule_err = 0.02, search_stopping_rule_rep = 20,
-                           main_show_info = True, main_drawing_graphs = True,
-                           sub_show_info = False, sub_drawing_graphs = False,
-                           info_func = (lambda info_args, txt: print(str(txt))),
-                           info_args = None,
-                           tensor_size_max = 4000, group_size_max = 20, loop_max_multiplier = 4,
-                           viz2d_x = None, viz2d_y = None):
-    ############################
-    ## Loading data: loading csv files
-    df = pd.read_csv(filepath_or_buffer=input_filepath, index_col=input_index_col)
-    output_data = copy.deepcopy(df)
-    data_size = len(df)
-    ############################
-    ## Dummy variable processing: dummy variable for columns where dtype is object
-    df = pd.get_dummies(df, drop_first=True, dtype="float") # float64, uint8, bool
-    ############################
-    ##  Handling missing values: interpolate by median
-    for col in df.columns:
-        df[col] = df[col].fillna(df[col].median())
-    ############################
-    ## data_points_nparray: NumPy array consisting of data points
-    data_points_nparray_org = np.array(df.values)
-    data_points_nparray = copy.deepcopy(data_points_nparray_org) ## data_points_nparray: NumPy array consisting of data points
-    data_points_nparray = data_points_nparray.astype(float)
-    ###########################################
-    ## Data Standardization
-    if standardization:
-        for i in range((data_points_nparray.shape)[1]):
-            if np.var(data_points_nparray[:,i]) > 0:
-                data_points_nparray[:,i] = (data_points_nparray[:,i] - np.mean(data_points_nparray[:,i]))/np.std(data_points_nparray[:,i])
-            else:
-                data_points_nparray[:,i] = data_points_nparray[:,i] - np.mean(data_points_nparray[:,i])
-    ###########################################
-    ## Division and Search
-    (opt_grouping_indexes_list, opt_intergroup_P_tensor,
-     opt_adjusted_cost_value,
-     opt_intergroup_cost_value, opt_intragroup_cost_value,
-     opt_mean_cost_value, opt_variance_cost_value,
-     iteration_number_list, elapsed_time_list,
-     new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
-     viz2d_x, viz2d_y
-    ) = gen_optimal_grouping(data_points_nparray, N_size, standardization,
-                            mean_penalty_weight, variance_penalty_weight,
-                            numerical_precision,
-                            ot_speed, ot_stopping_rule, ot_loop_max,
-                            tensor_tolerance, global_loop_max, local_loop_max,
-                            init_grouping_indexes_list, init_grouping_rand,
-                            search_method, search_stopping_rule_err, search_stopping_rule_rep,
-                            main_show_info, main_drawing_graphs,
-                            sub_show_info, sub_drawing_graphs,
-                            info_func, info_args,
-                            tensor_size_max, group_size_max, loop_max_multiplier,
-                            viz2d_x, viz2d_y)
-    ###########################################
-    ## Output grouping results to csv file
-    group_labels_list = np.zeros(data_size)
-    group = 0
-    for members_list in opt_grouping_indexes_list:
-        for member in members_list:
-            group_labels_list[member] = int(group)
-        group = group + 1
-    output_data.insert(loc=0, column="Group", value=group_labels_list.astype(int), allow_duplicates=True)
-    if (viz2d_x is not None) and (viz2d_y is not None):
-        output_data.insert(loc=1, column="viz2d_x", value=viz2d_x.astype(float), allow_duplicates=True)
-        output_data.insert(loc=2, column="viz2d_y", value=viz2d_y.astype(float), allow_duplicates=True)
-    output_data.to_csv(output_filepath)
-    ###########################################
-    ## Return
-    return (opt_grouping_indexes_list,
-            opt_intergroup_P_tensor,
-            opt_adjusted_cost_value,
-            opt_intergroup_cost_value, opt_intragroup_cost_value,
-            opt_mean_cost_value, opt_variance_cost_value,
-            iteration_number_list, elapsed_time_list,
-            new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
-            output_data, viz2d_x, viz2d_y
-    )
-
 ############################################################
 #### GUI with Flet ####
 
@@ -1041,8 +1994,10 @@ class FletParameters:
     N_accum = None
     N_size_prod = None
     standardization = False ## Standardization
-    mean_penalty_weight = 0.2 ## Weight of mean_cost_value
-    variance_penalty_weight = 0.8 ## Weight of variance_cost_value
+    mean_penalty_weight = 0.1 ## Weight of mean_cost_value
+    deviation_penalty_weight = 0.1 ## Weight of deviation_cost_value
+    cost_type = "mst" ## "mst": minimum spanning tree, "bc": barycenter
+    order = None ## Norm order: order=1.0 is the Manhattan distance and order=2 is the Euclidean distance. (If order==None, then order = 1.0 when cost_type=="mst" and order = 2.0 when cost_type=="bc".)
     numerical_precision = 2e-8 ## Values whose absolute value is less than or equal to numerical_precision are treated as 0.
     ot_speed = 0.02 ## Bigger means faster, smaller means stricter
     ot_stopping_rule = 0.02 ## Criteria to stop updating "u". If the relative error of "u" is smaller than the stop criterion, it is terminated.
@@ -1093,7 +2048,8 @@ def load_csv(input_filepath, input_index_col, standardization=False):
     return (df_org, df_cleaned, viz2d_x, viz2d_y)
     
 def gen_grouping_in_flet(df, N_size = None,
-                           mean_penalty_weight = 0.2, variance_penalty_weight = 0.8, 
+                           mean_penalty_weight = 0.1, deviation_penalty_weight = 0.1,
+                           cost_type = "mst", order = 1.0,
                            numerical_precision = 2e-8,
                            ot_speed = 0.02, ot_stopping_rule = 0.02, ot_loop_max = 200,
                            tensor_tolerance = 2e-8, global_loop_max = 100, local_loop_max = 100,
@@ -1170,7 +2126,8 @@ def gen_grouping_in_flet(df, N_size = None,
             res_calc_optimal_grouping = calc_optimal_grouping(
                 sub_data_points_nparray, sub_N_size,
                 sub_N_rank, sub_N_accum, sub_N_size_prod,
-                mean_penalty_weight, variance_penalty_weight,
+                mean_penalty_weight, deviation_penalty_weight,
+                cost_type, order,
                 numerical_precision,
                 ot_speed, ot_stopping_rule, ot_loop_max,
                 tensor_tolerance, global_loop_max, local_loop_max,
@@ -1195,7 +2152,8 @@ def gen_grouping_in_flet(df, N_size = None,
     else:
         res_calc_optimal_grouping = calc_optimal_grouping(data_points_nparray, N_size,
                             N_rank, N_accum, N_size_prod,
-                            mean_penalty_weight, variance_penalty_weight,
+                            mean_penalty_weight, deviation_penalty_weight,
+                            cost_type, order,
                             numerical_precision,
                             ot_speed, ot_stopping_rule, ot_loop_max,
                             tensor_tolerance, global_loop_max, local_loop_max,
@@ -1204,14 +2162,6 @@ def gen_grouping_in_flet(df, N_size = None,
                             main_show_info, main_drawing_graphs,
                             info_func, info_args,
                             viz2d_x, viz2d_y)
-    ## res_calc_optimal_grouping:
-    ## (opt_grouping_indexes_list, opt_intergroup_P_tensor,
-    ##  opt_adjusted_cost_value,
-    ##  opt_intergroup_cost_value, opt_intragroup_cost_value,
-    ##  opt_mean_cost_value, opt_variance_cost_value,
-    ##  iteration_number_list, elapsed_time_list,
-    ##  new_adjusted_cost_trends_list, opt_adjusted_cost_trends_list,
-    ##  viz2d_x, viz2d_y)
     ###########################################
     opt_grouping_indexes_list = res_calc_optimal_grouping[0]
     opt_intergroup_P_tensor = res_calc_optimal_grouping[1]
@@ -1276,7 +2226,7 @@ def draw_graph_in_flet(fig, ax, index_values, viz2d_x, viz2d_y,
                     elif N_rank == 2:
                         ax.plot(x_vec, y_vec, alpha=alp, color='black',
                                 marker=None, linestyle='solid', linewidth=2)
-    
+
 def main(page: ft.Page):
     ## Functions
     def minus_click(e):
@@ -1299,8 +2249,8 @@ def main(page: ft.Page):
     def m_weight_slider_changed(e):
         FletParameters.mean_penalty_weight = float(m_weight_slider.value)
     
-    def v_weight_slider_changed(e):
-        FletParameters.variance_penalty_weight = float(v_weight_slider.value)
+    def d_weight_slider_changed(e):
+        FletParameters.deviation_penalty_weight = float(d_weight_slider.value)
     
     def method_dropdown_changed(e): ## "ex": exchange algorithm, "rand": random search, "hybrid": Hybrid of exchange algorithm and random search.
         if method_dropdown.value == "Heuristics":
@@ -1371,7 +2321,8 @@ def main(page: ft.Page):
          FletParameters.N_size, FletParameters.N_rank,
          FletParameters.N_accum, FletParameters.N_size_prod) = gen_grouping_in_flet(
             FletParameters.df_cleaned, FletParameters.N_size,
-            FletParameters.mean_penalty_weight, FletParameters.variance_penalty_weight, 
+            FletParameters.mean_penalty_weight, FletParameters.deviation_penalty_weight,
+            FletParameters.cost_type, FletParameters.order,
             FletParameters.numerical_precision,
             FletParameters.ot_speed, FletParameters.ot_stopping_rule, FletParameters.ot_loop_max,
             FletParameters.tensor_tolerance, FletParameters.global_loop_max, FletParameters.local_loop_max,
@@ -1455,15 +2406,15 @@ def main(page: ft.Page):
         width=int(page.window_width/10),
     )
     m_weight_slider = ft.Slider(
-        value=0.2, min=0, max=1, divisions=10, round=1,
+        value=0.1, min=0, max=1, divisions=10, round=1,
         label="M:{value}",
         on_change=m_weight_slider_changed,
         width=int(page.window_width/10),
     )
-    v_weight_slider = ft.Slider(
-        value=0.8, min=0, max=1, divisions=10, round=1,
+    d_weight_slider = ft.Slider(
+        value=0.1, min=0, max=1, divisions=10, round=1,
         label="V:{value}",
-        on_change=v_weight_slider_changed,
+        on_change=d_weight_slider_changed,
         width=int(page.window_width/10),
     )
     method_dropdown = ft.Dropdown(
@@ -1568,8 +2519,8 @@ def main(page: ft.Page):
                         ),
                         ft.Container(
                             ft.Row([
-                                ft.Text(value="V-weight", text_align="RIGHT"),
-                                v_weight_slider,
+                                ft.Text(value="D-weight", text_align="RIGHT"),
+                                d_weight_slider,
                             ]),
                             bgcolor=ft.colors.BLUE_GREY_800,
                             alignment=ft.alignment.center,

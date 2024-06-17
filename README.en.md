@@ -3,7 +3,7 @@
 [English](README.en.md) &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [日本語](README.jp.md)
 
 ## Overview
-This is a Python program for generating groupings as uniformly as possible by using the optimal transport technique.
+This is a Python program designed to automatically generate as uniform group divisions as possible. It employs optimal transport for the construction of a uniformity index. The Sinkhorn-Knopp algorithm is used for the calculation of optimal transport. Furthermore, for dividing into three or more groups, the Sinkhorn-Knopp algorithm for multi-marginal optimal transport is required, and this program also implements it.
 
 ## Usage
 - Without a Python runtime environment
